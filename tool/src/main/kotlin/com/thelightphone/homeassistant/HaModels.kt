@@ -1,0 +1,168 @@
+package com.thelightphone.homeassistant
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+
+@Serializable
+data class ServerConfig(
+    val id: String,
+    val name: String,
+    val url: String,
+    val token: String,
+    val dashboard: String = "light-phone",
+    val webhookId: String? = null,
+    val cloudhookUrl: String? = null,
+    val remoteUiUrl: String? = null,
+)
+
+@Serializable
+data class RegistrationResponse(
+    val webhook_id: String,
+    val cloudhook_url: String? = null,
+    val remote_ui_url: String? = null,
+)
+
+/** Payload for the combined onboarding QR: {"url": ..., "token": ..., "name": ...} */
+@Serializable
+data class QrPayload(
+    val url: String,
+    val token: String,
+    val name: String? = null,
+)
+
+@Serializable
+data class HaState(
+    val entity_id: String,
+    val state: String,
+    val attributes: JsonObject = JsonObject(emptyMap()),
+) {
+    val friendlyName: String
+        get() = (attributes["friendly_name"] as? JsonPrimitive)?.contentOrNull ?: entity_id
+    val unit: String?
+        get() = (attributes["unit_of_measurement"] as? JsonPrimitive)?.contentOrNull
+    val domain: String
+        get() = entity_id.substringBefore(".")
+}
+
+/** One row on a rendered dashboard screen. */
+sealed class DashRow {
+    data class Header(val text: String) : DashRow()
+    data class Text(val text: String) : DashRow()
+    data class Entity(val entityId: String, val nameOverride: String? = null) : DashRow()
+}
+
+data class DashView(
+    val title: String,
+    val rows: List<DashRow>,
+    val skippedCards: Int,
+)
+
+/**
+ * Tolerant parser for a Lovelace dashboard config: flattens the cards of each
+ * view (including sections and stacks) into simple rows the LP3 can render.
+ */
+object LovelaceParser {
+
+    fun parse(config: JsonObject): List<DashView> {
+        val views = (config["views"] as? JsonArray).orEmpty()
+        return views.mapIndexedNotNull { index, viewEl ->
+            val view = viewEl as? JsonObject ?: return@mapIndexedNotNull null
+            var skipped = 0
+            val rows = mutableListOf<DashRow>()
+
+            fun addCard(card: JsonObject) {
+                when (card.str("type")?.removePrefix("custom:")) {
+                    "entities", "glance" -> {
+                        card.str("title")?.let { rows += DashRow.Header(it) }
+                        (card["entities"] as? JsonArray).orEmpty().forEach { ref ->
+                            when (ref) {
+                                is JsonPrimitive -> rows += DashRow.Entity(ref.content)
+                                is JsonObject -> ref.str("entity")?.let {
+                                    rows += DashRow.Entity(it, ref.str("name"))
+                                }
+                                else -> skipped++
+                            }
+                        }
+                    }
+                    "entity", "tile", "button", "light", "lock", "thermostat",
+                    "picture-entity", "sensor", "gauge", "humidifier" ->
+                        card.str("entity")?.let { rows += DashRow.Entity(it, card.str("name")) }
+                            ?: run { skipped++ }
+                    "markdown" -> card.str("content")?.let { rows += DashRow.Text(it) }
+                    "heading" -> card.str("heading")?.let { rows += DashRow.Header(it) }
+                    "vertical-stack", "horizontal-stack", "grid" ->
+                        (card["cards"] as? JsonArray).orEmpty()
+                            .forEach { (it as? JsonObject)?.let(::addCard) }
+                    else -> skipped++
+                }
+            }
+
+            (view["cards"] as? JsonArray).orEmpty()
+                .forEach { (it as? JsonObject)?.let(::addCard) }
+            (view["sections"] as? JsonArray).orEmpty().forEach { sectionEl ->
+                val section = sectionEl as? JsonObject ?: return@forEach
+                section.str("title")?.let { rows += DashRow.Header(it) }
+                (section["cards"] as? JsonArray).orEmpty()
+                    .forEach { (it as? JsonObject)?.let(::addCard) }
+            }
+
+            DashView(
+                title = view.str("title") ?: view.str("path") ?: "View ${index + 1}",
+                rows = rows,
+                skippedCards = skipped,
+            )
+        }
+    }
+
+    private fun JsonObject.str(key: String): String? =
+        (this[key] as? JsonPrimitive)?.contentOrNull
+
+    private fun JsonArray?.orEmpty(): JsonArray = this ?: JsonArray(emptyList())
+}
+
+/** Maps an entity's domain + current state to the service call a tap should perform. */
+object HaActions {
+
+    data class ServiceCall(val domain: String, val service: String)
+
+    fun actionFor(domain: String, state: String?): ServiceCall? = when (domain) {
+        "light", "switch", "fan", "input_boolean", "siren", "humidifier" ->
+            ServiceCall("homeassistant", "toggle")
+        "lock" ->
+            if (state == "locked") ServiceCall("lock", "unlock") else ServiceCall("lock", "lock")
+        "cover" ->
+            if (state == "open" || state == "opening") ServiceCall("cover", "close_cover")
+            else ServiceCall("cover", "open_cover")
+        "scene" -> ServiceCall("scene", "turn_on")
+        "script" -> ServiceCall("script", "turn_on")
+        "button", "input_button" -> ServiceCall(domain, "press")
+        "automation" -> ServiceCall("automation", "trigger")
+        else -> null
+    }
+
+    fun stateLabel(state: HaState?): String {
+        state ?: return "…"
+        return when (state.state) {
+            "on" -> "On"
+            "off" -> "Off"
+            "locked" -> "Locked"
+            "unlocked" -> "Unlocked"
+            "locking" -> "Locking…"
+            "unlocking" -> "Unlocking…"
+            "jammed" -> "Jammed"
+            "open" -> "Open"
+            "closed" -> "Closed"
+            "unavailable" -> "N/A"
+            "unknown" -> "?"
+            else -> state.unit?.let { "${state.state} $it" } ?: state.state
+        }
+    }
+
+    /** Domains that render as a "run" action instead of a state. */
+    fun isRunAction(domain: String): Boolean =
+        domain in setOf("scene", "script", "button", "input_button", "automation")
+}

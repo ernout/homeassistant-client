@@ -1,4 +1,4 @@
-package com.thelightphone.sample
+package com.thelightphone.homeassistant
 
 import android.util.Log
 import com.thelightphone.sdk.EntryPoint
@@ -8,19 +8,22 @@ import kotlinx.coroutines.flow.StateFlow
 
 @EntryPoint
 object ToolEntryPoint : LightEntryPoint {
-    // called when Tool first launches, use to initialize dependencies etc
+
     override suspend fun onToolCreate(
         serverData: StateFlow<LightServerData?>,
     ) {
         serverData.collect {
-            // this is where you'd send push credentials up to your app server
-            Log.d("ToolEntryPoint", "Current LightOS registration data: $it")
+            // Phase 4: forward the UnifiedPush endpoint to HA as app_data.push_url
+            // via an update_registration webhook call.
+            Log.d("HomeTool", "LightOS registration data: $it")
         }
     }
 
     override suspend fun onPushNotification(
         data: ByteArray,
     ) {
-        Log.d("ToolEntryPoint", "received push notification: $data")
+        // Phase 4: HA posts its notification JSON to the push endpoint; decode
+        // and display it via LightPushService here.
+        Log.d("HomeTool", "Push notification: ${data.decodeToString().take(200)}")
     }
 }

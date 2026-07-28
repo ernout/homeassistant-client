@@ -59,6 +59,14 @@ kotlin {
 
 dependencies {
     implementation(project(":sdk:client"))
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.okhttp)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.serialization.json)
+    implementation("io.ktor:ktor-client-websockets:${libs.versions.ktor.get()}")
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.androidx.datastore.preferences)
     testImplementation(libs.kotlin.test)
     ksp(libs.androidx.room.compiler)
 }
