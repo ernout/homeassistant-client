@@ -1,3 +1,10 @@
+# Home Assistant Tool
+I'm creating and testing a home assistant tool. Its very early days and mainly claude generated.
+Havent tested quality yet. 
+
+Aim is to be able to control home assistant like you can with the companion app, but in LP style.
+And location tracking and notifications are also on the wishlist.
+
 # light-sdk
 or: a tool for building Tools
 
