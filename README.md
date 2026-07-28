@@ -1,3 +1,26 @@
+# Home Assistant Tool for the Light Phone 3
+
+I'm creating and testing a Home Assistant tool for the Light Phone III. It's very early days and mainly Claude generated. Haven't tested quality yet.
+
+Aim is to be able to control Home Assistant like you can with the companion app, but in LP style. Location tracking and notifications are also on the wishlist.
+
+## Status
+
+What works today (tested against a real Home Assistant instance in the LightOS emulator):
+
+- Add a server with name / URL / long-lived access token (QR scan supported) — https only
+- The HA dashboard with url path `light-phone` is the source of truth: its cards render as a native Light-style list, its views become screens
+- Control entities per domain: toggles, locks (lock/unlock), covers, scenes, scripts, buttons
+- `mobile_app` registration: the phone shows up as a device in HA, with a battery sensor and `notify.mobile_app_*` service ready for later phases
+
+On the wishlist / blocked for now: live state updates over WebSocket, camera snapshots, notifications via UnifiedPush, and location + battery readings on-device (the Light sandbox doesn't expose an API for those yet).
+
+The app code lives in [`tool/src/main/kotlin/com/thelightphone/homeassistant/`](tool/src/main/kotlin/com/thelightphone/homeassistant/). See [PLAN.md](PLAN.md) for the full research, architecture and phase plan (in Dutch).
+
+This repo is a fork-style copy of Light's [light-sdk](https://github.com/lightphone/light-sdk) scaffold — their original README follows below.
+
+---
+
 # light-sdk
 or: a tool for building Tools
 
