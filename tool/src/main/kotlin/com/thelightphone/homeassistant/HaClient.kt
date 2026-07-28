@@ -234,7 +234,8 @@ class HaClient(private val server: ServerConfig) {
     ) = send(Frame.Text(obj.toString()))
 
     fun close() {
-        http.dispatcher.executorService.shutdown()
-        http.connectionPool.evictAll()
+        // No evictAll here: closing pooled TLS sockets performs network I/O and
+        // crashes with NetworkOnMainThreadException when called from main.
+        runCatching { http.dispatcher.executorService.shutdown() }
     }
 }
