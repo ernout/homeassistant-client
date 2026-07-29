@@ -289,7 +289,11 @@ class HomeViewModel(
         val data = code?.let { mapOf("code" to it) } ?: emptyMap()
         viewModelScope.launch {
             active.callService(action, entityId, data)
-                .onFailure { error.value = it.message }
+                .onFailure { failure ->
+                    val rejectedCode = data.containsKey("code") &&
+                        failure.message?.contains("HTTP 500") == true
+                    error.value = if (rejectedCode) "Incorrect code." else failure.message
+                }
             // Service calls return after the state change; refresh states only.
             active.fetchStates().onSuccess { (parsed, _) -> states.value = parsed }
         }

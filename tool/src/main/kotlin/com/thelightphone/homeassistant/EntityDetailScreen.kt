@@ -75,9 +75,16 @@ class EntityDetailViewModel(
     fun call(domain: String, service: String, data: Map<String, Any> = emptyMap()) {
         val active = client ?: return
         busy.value = true
+        error.value = null
         viewModelScope.launch {
             active.callService(HaActions.ServiceCall(domain, service), entityId, data)
-                .onFailure { error.value = it.message }
+                .onFailure { failure ->
+                    // HA raises ServiceValidationError for a bad code, which the
+                    // REST API flattens into a bare 500 — say what it means.
+                    val rejectedCode = data.containsKey("code") &&
+                        failure.message?.contains("HTTP 500") == true
+                    error.value = if (rejectedCode) "Incorrect code." else failure.message
+                }
             refresh()
             busy.value = false
         }
