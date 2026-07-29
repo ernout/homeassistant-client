@@ -552,7 +552,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
     private fun onEntityTap(entityId: String, label: String) {
         if (viewModel.tap(entityId) != HomeViewModel.TapOutcome.NEEDS_CODE) return
         navigateTo(
-            screenFactory = { TextEditScreen(it, "$label code", "") },
+            screenFactory = { CodeEntryScreen(it, "$label code") },
             resultCallback = { code ->
                 if (code.isNullOrBlank()) viewModel.clearPendingConfirm()
                 else viewModel.tap(entityId, code)

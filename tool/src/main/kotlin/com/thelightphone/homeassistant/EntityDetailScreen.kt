@@ -221,7 +221,7 @@ class EntityDetailScreen(
             return
         }
         navigateTo(
-            screenFactory = { TextEditScreen(it, "Code", "") },
+            screenFactory = { CodeEntryScreen(it, "Code") },
             resultCallback = { code ->
                 if (!code.isNullOrBlank()) {
                     viewModel.call("alarm_control_panel", service, mapOf("code" to code))
