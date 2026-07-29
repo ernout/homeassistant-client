@@ -214,12 +214,26 @@ object HaActions {
         "script" -> ServiceCall("script", "turn_on")
         "button", "input_button" -> ServiceCall(domain, "press")
         "automation" -> ServiceCall("automation", "trigger")
+        "alarm_control_panel" ->
+            if (state?.startsWith("armed") == true) {
+                ServiceCall("alarm_control_panel", "alarm_disarm")
+            } else {
+                ServiceCall("alarm_control_panel", "alarm_arm_away")
+            }
         else -> null
     }
 
     fun stateLabel(state: HaState?): String {
         state ?: return "…"
         return when (state.state) {
+            "disarmed" -> "Off"
+            "armed_home" -> "Home"
+            "armed_away" -> "Away"
+            "armed_night" -> "Night"
+            "armed_vacation" -> "Vacation"
+            "arming" -> "Arming…"
+            "pending" -> "Pending"
+            "triggered" -> "Triggered"
             "on" -> "On"
             "off" -> "Off"
             "locked" -> "Locked"
@@ -241,7 +255,8 @@ object HaActions {
      */
     fun needsConfirmation(domain: String, state: String?): Boolean = when (domain) {
         "lock" -> state == "locked"
-        "alarm_control_panel" -> state?.startsWith("armed") == true
+        // Both directions for an alarm: arming by accident is its own problem.
+        "alarm_control_panel" -> true
         else -> false
     }
 

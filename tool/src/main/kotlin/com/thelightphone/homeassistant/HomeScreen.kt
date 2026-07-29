@@ -250,31 +250,52 @@ class HomeViewModel(
         if (count > 1) viewIndex.value = (viewIndex.value + 1).mod(count)
     }
 
-    fun tap(entityId: String) {
-        val active = client ?: return
-        val domain = entityId.substringBefore(".")
-        val state = states.value[entityId]?.state
+    /** What a tap should do next; the screen handles the code prompt. */
+    enum class TapOutcome { AWAITING_CONFIRM, NEEDS_CODE, PERFORMED }
 
-        // Opening a lock takes two taps, so a pocket press can't unlock a door.
-        if (HaActions.needsConfirmation(domain, state) && pendingConfirm.value != entityId) {
+    fun tap(entityId: String, code: String? = null): TapOutcome {
+        val active = client ?: return TapOutcome.PERFORMED
+        val domain = entityId.substringBefore(".")
+        val entity = states.value[entityId]
+        val state = entity?.state
+
+        // Opening a lock, or arming/disarming, takes two taps: a pocket press
+        // should never unlock a door or switch the alarm.
+        if (code == null &&
+            HaActions.needsConfirmation(domain, state) &&
+            pendingConfirm.value != entityId
+        ) {
             pendingConfirm.value = entityId
             confirmTimeout?.cancel()
             confirmTimeout = viewModelScope.launch {
                 kotlinx.coroutines.delay(CONFIRM_WINDOW_MILLIS)
                 if (pendingConfirm.value == entityId) pendingConfirm.value = null
             }
-            return
+            return TapOutcome.AWAITING_CONFIRM
         }
+
+        // Alarms often want their keypad code with the service call.
+        if (code == null && entity?.text("code_format") != null) {
+            return TapOutcome.NEEDS_CODE
+        }
+
         pendingConfirm.value = null
         confirmTimeout?.cancel()
 
-        val action = HaActions.actionFor(domain, state) ?: return
+        val action = HaActions.actionFor(domain, state) ?: return TapOutcome.PERFORMED
+        val data = code?.let { mapOf("code" to it) } ?: emptyMap()
         viewModelScope.launch {
-            active.callService(action, entityId)
+            active.callService(action, entityId, data)
                 .onFailure { error.value = it.message }
             // Service calls return after the state change; refresh states only.
             active.fetchStates().onSuccess { (parsed, _) -> states.value = parsed }
         }
+        return TapOutcome.PERFORMED
+    }
+
+    fun clearPendingConfirm() {
+        pendingConfirm.value = null
+        confirmTimeout?.cancel()
     }
 
     override fun onCleared() {
@@ -488,7 +509,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                     when {
                         isCamera -> it.lightClickable { openCamera(row.entityId, label) }
                         hasDetail -> it.lightClickable { openDetail(row.entityId, label) }
-                        actionable -> it.lightClickable { viewModel.tap(row.entityId) }
+                        actionable -> it.lightClickable { onEntityTap(row.entityId, label) }
                         else -> it
                     }
                 }
@@ -502,7 +523,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             )
             LightText(
                 text = when {
-                    pendingConfirm == row.entityId -> confirmLabel(domain)
+                    pendingConfirm == row.entityId -> confirmLabel(domain, state?.state)
                     isCamera -> "▸"
                     HaActions.isRunAction(domain) -> "▷"
                     else -> HaActions.stateLabel(state)
@@ -525,8 +546,23 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         navigateTo(screenFactory = { CameraScreen(it, server, entityId, label) })
     }
 
-    private fun confirmLabel(domain: String) =
-        if (domain == "lock") "Unlock?" else "Disarm?"
+    private fun onEntityTap(entityId: String, label: String) {
+        if (viewModel.tap(entityId) != HomeViewModel.TapOutcome.NEEDS_CODE) return
+        navigateTo(
+            screenFactory = { TextEditScreen(it, "$label code", "") },
+            resultCallback = { code ->
+                if (code.isNullOrBlank()) viewModel.clearPendingConfirm()
+                else viewModel.tap(entityId, code)
+            },
+        )
+    }
+
+    private fun confirmLabel(domain: String, state: String?): String = when {
+        domain == "lock" -> "Unlock?"
+        domain == "alarm_control_panel" && state?.startsWith("armed") == true -> "Disarm?"
+        domain == "alarm_control_panel" -> "Arm away?"
+        else -> "Confirm?"
+    }
 
     private fun openDetail(entityId: String, label: String) {
         val server = viewModel.server.value ?: return
