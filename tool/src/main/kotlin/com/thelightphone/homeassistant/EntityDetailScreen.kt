@@ -163,6 +163,7 @@ class EntityDetailScreen(
 
                 Column(modifier = Modifier.padding(horizontal = 1f.gridUnitsAsDp())) {
                     when (state?.domain) {
+                        "alarm_control_panel" -> AlarmControls(state)
                         "light" -> LightControls(state)
                         "cover" -> CoverControls(state)
                         "climate" -> ClimateControls(state)
@@ -182,6 +183,51 @@ class EntityDetailScreen(
                 }
             }
         }
+    }
+
+    @Composable
+    private fun AlarmControls(state: HaState?) {
+        val current = state?.state
+        BigValue(HaActions.stateLabel(state))
+
+        val modes = AlarmModes.available(state?.number("supported_features")?.toInt() ?: 0)
+        val entries = listOf("alarm_disarm" to "Disarm") + modes
+        entries.forEach { (service, label) ->
+            val active = current == AlarmModes.stateFor(service)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .lightClickable { runAlarmService(state, service) }
+                    .padding(vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LightText(
+                    text = label,
+                    variant = LightTextVariant.Copy,
+                    modifier = Modifier.weight(1f),
+                )
+                if (active) LightText(text = "·", variant = LightTextVariant.Copy)
+            }
+        }
+    }
+
+    /** Prompts for the keypad code first, but only where the panel demands one. */
+    private fun runAlarmService(state: HaState?, service: String) {
+        val disarming = service == "alarm_disarm"
+        val needsCode = state?.text("code_format") != null &&
+            (disarming || state.flag("code_arm_required") == true)
+        if (!needsCode) {
+            viewModel.call("alarm_control_panel", service)
+            return
+        }
+        navigateTo(
+            screenFactory = { TextEditScreen(it, "Code", "") },
+            resultCallback = { code ->
+                if (!code.isNullOrBlank()) {
+                    viewModel.call("alarm_control_panel", service, mapOf("code" to code))
+                }
+            },
+        )
     }
 
     @Composable

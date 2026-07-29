@@ -77,6 +77,31 @@ data class HaState(
 // Not a companion object inside HaState: kotlinx.serialization resolves the
 // serializer through HaState.Companion, so declaring a private one there makes
 // it inaccessible to callers at runtime.
+/** Arm modes an alarm panel advertises through supported_features. */
+object AlarmModes {
+    private const val ARM_HOME = 1
+    private const val ARM_AWAY = 2
+    private const val ARM_NIGHT = 4
+    private const val ARM_VACATION = 32
+
+    /** Service name to label, for the modes this panel actually supports. */
+    fun available(supportedFeatures: Int): List<Pair<String, String>> = buildList {
+        if (supportedFeatures and ARM_HOME != 0) add("alarm_arm_home" to "Arm home")
+        if (supportedFeatures and ARM_AWAY != 0) add("alarm_arm_away" to "Arm away")
+        if (supportedFeatures and ARM_NIGHT != 0) add("alarm_arm_night" to "Arm night")
+        if (supportedFeatures and ARM_VACATION != 0) add("alarm_arm_vacation" to "Arm vacation")
+    }
+
+    /** The state each arm service leads to, so the active one can be marked. */
+    fun stateFor(service: String): String = when (service) {
+        "alarm_arm_home" -> "armed_home"
+        "alarm_arm_away" -> "armed_away"
+        "alarm_arm_night" -> "armed_night"
+        "alarm_arm_vacation" -> "armed_vacation"
+        else -> "disarmed"
+    }
+}
+
 /** on/off wording per binary_sensor device class, following HA's frontend. */
 private val BINARY_SENSOR_LABELS: Map<String, Pair<String, String>> = mapOf(
     "battery" to ("Low" to "Normal"),
@@ -300,8 +325,6 @@ object HaActions {
      */
     fun needsConfirmation(domain: String, state: String?): Boolean = when (domain) {
         "lock" -> state == "locked"
-        // Both directions for an alarm: arming by accident is its own problem.
-        "alarm_control_panel" -> true
         else -> false
     }
 
@@ -316,7 +339,8 @@ object HaActions {
     fun hasDetailScreen(state: HaState?): Boolean {
         state ?: return false
         return when (state.domain) {
-            "climate", "cover", "fan", "media_player", "input_number", "number" -> true
+            "climate", "cover", "fan", "media_player", "input_number", "number",
+            "alarm_control_panel" -> true
             "light" -> state.supportsBrightness
             else -> false
         }
