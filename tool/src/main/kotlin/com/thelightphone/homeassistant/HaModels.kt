@@ -56,6 +56,9 @@ data class HaState(
     fun text(key: String): String? =
         (attributes[key] as? JsonPrimitive)?.contentOrNull
 
+    fun flag(key: String): Boolean? =
+        (attributes[key] as? JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull()
+
     fun textList(key: String): List<String> =
         (attributes[key] as? JsonArray)
             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
@@ -246,11 +249,13 @@ object HaActions {
         "script" -> ServiceCall("script", "turn_on")
         "button", "input_button" -> ServiceCall(domain, "press")
         "automation" -> ServiceCall("automation", "trigger")
+        // Anything other than disarmed — including the arming countdown —
+        // should disarm, so a tap can cancel an accidental arm.
         "alarm_control_panel" ->
-            if (state?.startsWith("armed") == true) {
-                ServiceCall("alarm_control_panel", "alarm_disarm")
-            } else {
+            if (state == "disarmed" || state == null) {
                 ServiceCall("alarm_control_panel", "alarm_arm_away")
+            } else {
+                ServiceCall("alarm_control_panel", "alarm_disarm")
             }
         else -> null
     }

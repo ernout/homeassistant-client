@@ -274,9 +274,12 @@ class HomeViewModel(
             return TapOutcome.AWAITING_CONFIRM
         }
 
-        // Alarms often want their keypad code with the service call.
+        // Ask for the keypad code only where the panel actually demands one:
+        // many are configured to arm without it.
         if (code == null && entity?.text("code_format") != null) {
-            return TapOutcome.NEEDS_CODE
+            val arming = state == "disarmed" || state == null
+            val required = !arming || entity.flag("code_arm_required") == true
+            if (required) return TapOutcome.NEEDS_CODE
         }
 
         pendingConfirm.value = null
@@ -559,8 +562,8 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
 
     private fun confirmLabel(domain: String, state: String?): String = when {
         domain == "lock" -> "Unlock?"
-        domain == "alarm_control_panel" && state?.startsWith("armed") == true -> "Disarm?"
-        domain == "alarm_control_panel" -> "Arm away?"
+        domain == "alarm_control_panel" && state == "disarmed" -> "Arm away?"
+        domain == "alarm_control_panel" -> "Disarm?"
         else -> "Confirm?"
     }
 
