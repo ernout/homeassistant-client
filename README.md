@@ -25,6 +25,10 @@ Tested on a Light Phone III against a live Home Assistant instance.
 - Detail screens with large − and + steppers for anything with more than on/off: dimmable lights, cover position, climate target temperature (including picking the HVAC mode and seeing what the unit is actually doing), fan speed, number helpers
 - Live updates over a WebSocket while the dashboard is open, so a light someone else switches changes on your screen too
 
+**Asking**
+- Assist, reachable from every dashboard view: ask by typing, or hold a spoken conversation through HA's voice pipeline (speech to text, intent, spoken answer)
+- Pick which assistant answers — a pipeline whose agent has gone missing is one tap away from a working one
+
 **Camera and map**
 - Camera entities open a near-fullscreen still, refreshed every couple of seconds
 - Map cards render OpenStreetMap tiles with lettered markers per tracked entity, zoomed to fit, listing zone and distance underneath
@@ -39,6 +43,7 @@ Tested on a Light Phone III against a live Home Assistant instance.
 
 - **Notifications**: LightOS can wake a tool over UnifiedPush, but doesn't yet show notifications from third-party tools ([discussion #111](https://github.com/orgs/lightphone/discussions/111) — Light says it's in progress)
 - **Local HTTP instances**: blocked by the generated manifest, see above
+- **Voice needs a manual permission grant**: LightOS refuses `RECORD_AUDIO` to tools (`adb shell pm grant com.thelightphone.homeassistant android.permission.RECORD_AUDIO` works around it)
 - Battery, location, motion and geofencing rely on primitives added to `sdk/client` in the `private-build` branch, because the SDK doesn't expose them yet. The `home-assistant-tool` branch stays within the sandbox and does without.
 
 Things we ran into that need Light's side to change — bugs, missing primitives, open questions — are collected in [LIGHT-SDK-FEEDBACK.md](LIGHT-SDK-FEEDBACK.md).
