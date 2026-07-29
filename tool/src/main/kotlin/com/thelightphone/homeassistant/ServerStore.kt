@@ -8,17 +8,28 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 
 /**
- * Persists the configured Home Assistant servers as JSON in the tool's
- * preferences DataStore. Token encryption via Keystore is a later phase.
+ * Persists the configured Home Assistant servers in the tool's preferences
+ * DataStore, sealed with a Keystore-backed key (see [SecretVault]) because the
+ * tokens they hold can unlock doors.
  */
-class ServerStore(private val dataStore: DataStore<Preferences>) {
+class ServerStore(
+    private val dataStore: DataStore<Preferences>,
+    private val vault: SecretVault = SecretVault(),
+) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun servers(): List<ServerConfig> {
-        val raw = dataStore.data.first()[SERVERS] ?: return emptyList()
-        return runCatching { json.decodeFromString<List<ServerConfig>>(raw) }
-            .getOrDefault(emptyList())
+        val stored = dataStore.data.first()[SERVERS] ?: return emptyList()
+        val decrypted = vault.decrypt(stored)
+        val list = runCatching {
+            json.decodeFromString<List<ServerConfig>>(decrypted ?: stored)
+        }.getOrDefault(emptyList())
+
+        // Anything written before encryption existed is still plain JSON on
+        // disk: seal it now rather than waiting for the next edit.
+        if (decrypted == null && list.isNotEmpty()) writeServers(list)
+        return list
     }
 
     suspend fun selected(): ServerConfig? {
@@ -30,17 +41,36 @@ class ServerStore(private val dataStore: DataStore<Preferences>) {
 
     suspend fun upsert(server: ServerConfig) {
         val all = servers().filter { it.id != server.id } + server
-        dataStore.edit {
-            it[SERVERS] = json.encodeToString(all)
-            it[SELECTED] = server.id
-        }
+        val id = server.id
+        writeServers(all)
+        dataStore.edit { it[SELECTED] = id }
     }
 
     suspend fun remove(serverId: String) {
         val all = servers().filter { it.id != serverId }
+        writeServers(all)
         dataStore.edit {
-            it[SERVERS] = json.encodeToString(all)
             if (it[SELECTED] == serverId) it.remove(SELECTED)
+        }
+        // Nothing left worth protecting; drop the caches with it.
+        if (all.isEmpty()) clearCaches()
+    }
+
+    private suspend fun writeServers(all: List<ServerConfig>) {
+        val encoded = json.encodeToString(all)
+        val sealed = vault.encrypt(encoded)
+        if (sealed == null) {
+            android.util.Log.e("HomeTool", "could not encrypt credentials; refusing to store")
+            return
+        }
+        dataStore.edit { it[SERVERS] = sealed }
+    }
+
+    private suspend fun clearCaches() {
+        dataStore.edit { prefs ->
+            prefs.asMap().keys
+                .filter { it.name.startsWith("dashboard_") || it.name.startsWith("states_") }
+                .forEach { prefs.remove(stringPreferencesKey(it.name)) }
         }
     }
 
