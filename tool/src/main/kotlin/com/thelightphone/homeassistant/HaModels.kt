@@ -74,6 +74,38 @@ data class HaState(
 // Not a companion object inside HaState: kotlinx.serialization resolves the
 // serializer through HaState.Companion, so declaring a private one there makes
 // it inaccessible to callers at runtime.
+/** on/off wording per binary_sensor device class, following HA's frontend. */
+private val BINARY_SENSOR_LABELS: Map<String, Pair<String, String>> = mapOf(
+    "battery" to ("Low" to "Normal"),
+    "battery_charging" to ("Charging" to "Not charging"),
+    "carbon_monoxide" to ("Detected" to "Clear"),
+    "cold" to ("Cold" to "Normal"),
+    "connectivity" to ("Connected" to "Disconnected"),
+    "door" to ("Open" to "Closed"),
+    "garage_door" to ("Open" to "Closed"),
+    "gas" to ("Detected" to "Clear"),
+    "heat" to ("Hot" to "Normal"),
+    "light" to ("Light" to "No light"),
+    "lock" to ("Unlocked" to "Locked"),
+    "moisture" to ("Wet" to "Dry"),
+    "motion" to ("Detected" to "Clear"),
+    "moving" to ("Moving" to "Still"),
+    "occupancy" to ("Detected" to "Clear"),
+    "opening" to ("Open" to "Closed"),
+    "plug" to ("Plugged in" to "Unplugged"),
+    "power" to ("Detected" to "No power"),
+    "presence" to ("Home" to "Away"),
+    "problem" to ("Problem" to "OK"),
+    "running" to ("Running" to "Not running"),
+    "safety" to ("Unsafe" to "Safe"),
+    "smoke" to ("Detected" to "Clear"),
+    "sound" to ("Detected" to "Clear"),
+    "tamper" to ("Detected" to "Clear"),
+    "update" to ("Update available" to "Up-to-date"),
+    "vibration" to ("Detected" to "Clear"),
+    "window" to ("Open" to "Closed"),
+)
+
 private val BRIGHTNESS_MODES = setOf(
     "brightness", "color_temp", "hs", "rgb", "rgbw", "rgbww", "white", "xy",
 )
@@ -225,6 +257,14 @@ object HaActions {
 
     fun stateLabel(state: HaState?): String {
         state ?: return "…"
+        // A binary_sensor's on/off means something different per device class,
+        // the same way HA words it in the frontend.
+        if (state.domain == "binary_sensor") {
+            val on = state.state == "on"
+            BINARY_SENSOR_LABELS[state.text("device_class")]?.let { (onLabel, offLabel) ->
+                return if (on) onLabel else offLabel
+            }
+        }
         return when (state.state) {
             "disarmed" -> "Off"
             "armed_home" -> "Home"
