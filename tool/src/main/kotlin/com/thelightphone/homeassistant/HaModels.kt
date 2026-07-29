@@ -49,6 +49,24 @@ data class HaState(
         get() = (attributes["unit_of_measurement"] as? JsonPrimitive)?.contentOrNull
     val domain: String
         get() = entity_id.substringBefore(".")
+
+    fun number(key: String): Double? =
+        (attributes[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+
+    /** Brightness as a percentage; HA reports it 0-255. */
+    val brightnessPercent: Int?
+        get() = number("brightness")?.let { (it / 255.0 * 100).toInt() }
+
+    val supportsBrightness: Boolean
+        get() = attributes["brightness"] != null ||
+            (attributes["supported_color_modes"] as? JsonArray)
+                ?.any { (it as? JsonPrimitive)?.contentOrNull in BRIGHTNESS_MODES } == true
+
+    private companion object {
+        val BRIGHTNESS_MODES = setOf(
+            "brightness", "color_temp", "hs", "rgb", "rgbw", "rgbww", "white", "xy",
+        )
+    }
 }
 
 /** One row on a rendered dashboard screen. */
@@ -59,12 +77,16 @@ sealed class DashRow {
 
     /** A map card: opens a plotted view of the entities it tracks. */
     data class Map(val entityIds: List<String>, val title: String) : DashRow()
+
+    /** A button card with a navigate tap action: jumps to another view. */
+    data class Navigate(val path: String, val title: String) : DashRow()
 }
 
 data class DashView(
     val title: String,
     val rows: List<DashRow>,
     val skippedCards: Int,
+    val path: String? = null,
 )
 
 /**
@@ -111,9 +133,20 @@ object LovelaceParser {
                             ?.let { rows += DashRow.Entity(it, card.str("name")) }
                             ?: run { skipped++ }
                     "entity", "tile", "button", "light", "lock", "thermostat",
-                    "picture-entity", "sensor", "gauge", "humidifier" ->
-                        card.str("entity")?.let { rows += DashRow.Entity(it, card.str("name")) }
-                            ?: run { skipped++ }
+                    "picture-entity", "sensor", "gauge", "humidifier" -> {
+                        val navigatePath = (card["tap_action"] as? JsonObject)
+                            ?.takeIf { it.str("action") == "navigate" }
+                            ?.str("navigation_path")
+                        when {
+                            navigatePath != null -> rows += DashRow.Navigate(
+                                path = navigatePath,
+                                title = card.str("name") ?: card.str("title") ?: navigatePath,
+                            )
+                            else -> card.str("entity")
+                                ?.let { rows += DashRow.Entity(it, card.str("name")) }
+                                ?: run { skipped++ }
+                        }
+                    }
                     "markdown" -> card.str("content")?.let { rows += DashRow.Text(it) }
                     "heading" -> card.str("heading")?.let { rows += DashRow.Header(it) }
                     "vertical-stack", "horizontal-stack", "grid" ->
@@ -136,6 +169,7 @@ object LovelaceParser {
                 title = view.str("title") ?: view.str("path") ?: "View ${index + 1}",
                 rows = rows,
                 skippedCards = skipped,
+                path = view.str("path"),
             )
         }
     }
@@ -187,4 +221,17 @@ object HaActions {
     /** Domains that render as a "run" action instead of a state. */
     fun isRunAction(domain: String): Boolean =
         domain in setOf("scene", "script", "button", "input_button", "automation")
+
+    /**
+     * True when an entity has more than on/off to offer — a brightness, a
+     * position, a temperature — and so deserves its own screen.
+     */
+    fun hasDetailScreen(state: HaState?): Boolean {
+        state ?: return false
+        return when (state.domain) {
+            "climate", "cover", "fan", "media_player", "input_number", "number" -> true
+            "light" -> state.supportsBrightness
+            else -> false
+        }
+    }
 }

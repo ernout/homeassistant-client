@@ -226,6 +226,17 @@ class HomeViewModel(
         }
     }
 
+    /** Follows a navigate tap action, e.g. "/light-phone/upstairs" or "upstairs". */
+    fun openViewByPath(path: String) {
+        val wanted = path.trimEnd('/').substringAfterLast('/')
+        val index = views.value.indexOfFirst { it.path == wanted }
+        if (index >= 0) {
+            viewIndex.value = index
+        } else {
+            error.value = "No view '$wanted' on this dashboard."
+        }
+    }
+
     fun nextView() {
         val count = views.value.size
         if (count > 1) viewIndex.value = (viewIndex.value + 1).mod(count)
@@ -401,22 +412,29 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
                     is DashRow.Entity -> EntityRow(row, states)
-                    is DashRow.Map -> Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .lightClickable { openMap(row.entityIds, row.title) }
-                            .padding(vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        LightText(
-                            text = row.title,
-                            variant = LightTextVariant.Copy,
-                            modifier = Modifier.weight(1f),
-                        )
-                        LightText(text = "▸", variant = LightTextVariant.Copy)
-                    }
+                    is DashRow.Map -> LinkRow(row.title) { openMap(row.entityIds, row.title) }
+                    is DashRow.Navigate -> LinkRow(row.title) { viewModel.openViewByPath(row.path) }
                 }
             }
+        }
+    }
+
+    /** A row that leads somewhere else: another view, a map, a camera. */
+    @Composable
+    private fun LinkRow(title: String, onClick: () -> Unit) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .lightClickable(onClick = onClick)
+                .padding(vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LightText(
+                text = title,
+                variant = LightTextVariant.Copy,
+                modifier = Modifier.weight(1f),
+            )
+            LightText(text = "▸", variant = LightTextVariant.Copy)
         }
     }
 
@@ -425,7 +443,8 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         val state = states[row.entityId]
         val domain = row.entityId.substringBefore(".")
         val isCamera = domain == "camera"
-        val actionable = isCamera || HaActions.actionFor(domain, state?.state) != null
+        val hasDetail = HaActions.hasDetailScreen(state)
+        val actionable = isCamera || hasDetail || HaActions.actionFor(domain, state?.state) != null
         val label = row.nameOverride ?: state?.friendlyName ?: row.entityId
 
         Row(
@@ -434,6 +453,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 .let {
                     when {
                         isCamera -> it.lightClickable { openCamera(row.entityId, label) }
+                        hasDetail -> it.lightClickable { openDetail(row.entityId, label) }
                         actionable -> it.lightClickable { viewModel.tap(row.entityId) }
                         else -> it
                     }
@@ -468,6 +488,14 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
     private fun openCamera(entityId: String, label: String) {
         val server = viewModel.server.value ?: return
         navigateTo(screenFactory = { CameraScreen(it, server, entityId, label) })
+    }
+
+    private fun openDetail(entityId: String, label: String) {
+        val server = viewModel.server.value ?: return
+        navigateTo(
+            screenFactory = { EntityDetailScreen(it, server, entityId, label) },
+            resultCallback = { viewModel.refresh() },
+        )
     }
 
     private fun openMap(entityIds: List<String>, title: String) {
