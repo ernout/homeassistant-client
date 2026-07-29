@@ -52,12 +52,47 @@ class HomeViewModel(
     val error = MutableStateFlow<String?>(null)
     val loading = MutableStateFlow(false)
 
+    val live = MutableStateFlow(false)
+
     private var client: HaClient? = null
     private var clientConfig: ServerConfig? = null
+    private var liveConnection: HaLiveConnection? = null
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
         super.onScreenShow(screen)
         reload()
+    }
+
+    override fun onScreenHide(screen: SimpleLightScreen<Unit>) {
+        stopLive()
+        super.onScreenHide(screen)
+    }
+
+    override fun onAppPause() {
+        stopLive()
+        super.onAppPause()
+    }
+
+    /** Subscribes to just the entities the current dashboard renders. */
+    private fun startLive() {
+        val cfg = clientConfig ?: return
+        val ids = views.value
+            .flatMap { view -> view.rows.filterIsInstance<DashRow.Entity>().map { it.entityId } }
+            .distinct()
+        if (ids.isEmpty()) return
+        liveConnection?.stop()
+        liveConnection = HaLiveConnection(
+            server = cfg,
+            entityIds = ids,
+            scope = viewModelScope,
+            onStates = { updated -> states.value = states.value + updated },
+            onConnected = { live.value = it },
+        ).also { it.start() }
+    }
+
+    private fun stopLive() {
+        liveConnection?.stop()
+        liveConnection = null
     }
 
     fun reload() {
@@ -114,6 +149,7 @@ class HomeViewModel(
                     if (error.value == null) error.value = it.message
                 }
             loading.value = false
+            startLive()
         }
     }
 
@@ -153,14 +189,14 @@ class HomeViewModel(
         val cfg = clientConfig ?: return
         if (cfg.webhookId == null) return
         val active = client ?: return
-        val level = battery.levelPercent()
+        val level = if (cfg.sendBattery) battery.levelPercent() else null
 
         val result = runCatching {
             if (level != null) {
                 active.registerBatterySensor(level).getOrThrow()
                 active.updateBatterySensor(level).getOrThrow()
             }
-            location.current().let { fix ->
+            (if (cfg.sendLocation) location.current() else null).let { fix ->
                 if (fix != null) {
                     active.updateLocation(
                         latitude = fix.latitude,
@@ -236,6 +272,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         val states by viewModel.states.collectAsState()
         val error by viewModel.error.collectAsState()
         val loading by viewModel.loading.collectAsState()
+        val live by viewModel.live.collectAsState()
 
         LightTheme(colors = themeColors) {
             Column(
@@ -246,7 +283,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 when (hasServers) {
                     null -> Unit
                     false -> EmptyState()
-                    true -> Dashboard(server, views, viewIndex, states, error, loading)
+                    true -> Dashboard(server, views, viewIndex, states, error, loading, live)
                 }
             }
         }
@@ -284,6 +321,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         states: Map<String, HaState>,
         error: String?,
         loading: Boolean,
+        live: Boolean,
     ) {
         val view = views.getOrNull(viewIndex)
         val centerText = buildString {
@@ -293,7 +331,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         LightTopBar(
             leftButton = LightBarButton.LightIcon(
                 icon = LightIcons.SETTINGS,
-                onClick = { openSetup(server) },
+                onClick = { openSettings() },
             ),
             center = LightTopBarCenter.Text(
                 text = centerText,
@@ -302,7 +340,11 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 },
             ),
             rightButton = LightBarButton.Text(
-                text = if (loading) "…" else "↻",
+                text = when {
+                    loading -> "…"
+                    live -> "•"
+                    else -> "↻"
+                },
                 onClick = { viewModel.refresh() },
             ),
             modifier = Modifier.padding(bottom = 1f.gridUnitsAsDp()),
@@ -381,6 +423,13 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         navigateTo(
             screenFactory = { SetupScreen(it, existing) },
             resultCallback = { saved -> if (saved == true) viewModel.reload() },
+        )
+    }
+
+    private fun openSettings() {
+        navigateTo(
+            screenFactory = { SettingsScreen(it) },
+            resultCallback = { changed -> if (changed == true) viewModel.reload() },
         )
     }
 }

@@ -17,6 +17,9 @@ data class ServerConfig(
     val webhookId: String? = null,
     val cloudhookUrl: String? = null,
     val remoteUiUrl: String? = null,
+    /** Opt-in: don't report where the phone is unless asked to. */
+    val sendLocation: Boolean = false,
+    val sendBattery: Boolean = true,
 )
 
 @Serializable
