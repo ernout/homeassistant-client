@@ -54,6 +54,7 @@ class HaAssistPipeline(
      */
     suspend fun run(
         conversationId: String?,
+        pipelineId: String? = null,
         onListening: () -> Unit,
         onTranscript: (String) -> Unit,
         onReply: (AssistReply) -> Unit,
@@ -84,7 +85,7 @@ class HaAssistPipeline(
                             onError("Invalid token.")
                             return@webSocket
                         }
-                        "auth_ok" -> send(Frame.Text(runRequest(conversationId)))
+                        "auth_ok" -> send(Frame.Text(runRequest(conversationId, pipelineId)))
                         "result" -> {
                             val ok = (message["success"] as? JsonPrimitive)?.contentOrNull == "true"
                             if (!ok) {
@@ -139,12 +140,13 @@ class HaAssistPipeline(
         }
     }
 
-    private fun runRequest(conversationId: String?) = buildJsonObject {
+    private fun runRequest(conversationId: String?, pipelineId: String?) = buildJsonObject {
         put("id", RUN_ID)
         put("type", "assist_pipeline/run")
         put("start_stage", "stt")
         put("end_stage", "tts")
         conversationId?.let { put("conversation_id", it) }
+        pipelineId?.let { put("pipeline", it) }
         put(
             "input",
             buildJsonObject { put("sample_rate", SAMPLE_RATE) },

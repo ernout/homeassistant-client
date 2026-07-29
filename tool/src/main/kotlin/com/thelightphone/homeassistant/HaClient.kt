@@ -114,11 +114,13 @@ class HaClient(private val server: ServerConfig) {
         text: String,
         conversationId: String? = null,
         language: String? = null,
+        agentId: String? = null,
     ): Result<AssistReply> = runCatching {
         val body = buildJsonObject {
             put("text", text)
             conversationId?.let { put("conversation_id", it) }
             language?.let { put("language", it) }
+            agentId?.let { put("agent_id", it) }
         }.toString()
         val response = json.parseToJsonElement(post("/api/conversation/process", body)).jsonObject
         AssistReply(
@@ -136,6 +138,85 @@ class HaClient(private val server: ServerConfig) {
             ?.let { it as? JsonObject }
             ?.get("speech")
             ?.let { (it as? JsonPrimitive)?.contentOrNull }
+
+    /**
+     * Lists the instance's Assist pipelines. Which one answers matters: a
+     * pipeline pointing at an agent that is no longer loaded (an unplugged
+     * Ollama, say) fails every question until another is chosen.
+     */
+    suspend fun fetchPipelines(): Result<List<AssistPipeline>> = runCatching {
+        val result = websocketCommand(
+            buildJsonObject {
+                put("id", PIPELINES_COMMAND_ID)
+                put("type", "assist_pipeline/pipeline/list")
+            },
+        ) ?: error("Assist is not set up on this server.")
+
+        val preferred = (result["preferred_pipeline"] as? JsonPrimitive)?.contentOrNull
+        (result["pipelines"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull {
+            val pipeline = it as? JsonObject ?: return@mapNotNull null
+            val id = (pipeline["id"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            AssistPipeline(
+                id = id,
+                name = (pipeline["name"] as? JsonPrimitive)?.contentOrNull ?: id,
+                conversationEngine =
+                    (pipeline["conversation_engine"] as? JsonPrimitive)?.contentOrNull,
+                preferred = id == preferred,
+            )
+        }
+    }
+
+    private fun kotlinx.serialization.json.JsonArray?.orEmpty() =
+        this ?: kotlinx.serialization.json.JsonArray(emptyList())
+
+    /** Runs one authenticated WebSocket command and returns its result object. */
+    private suspend fun websocketCommand(command: JsonObject): JsonObject? {
+        val wsUrl = baseUrl
+            .replaceFirst("https://", "wss://")
+            .replaceFirst("http://", "ws://") + "/api/websocket"
+        var result: JsonObject? = null
+        var failure: String? = null
+
+        val ws = HttpClient(OkHttp) { install(WebSockets) }
+        try {
+            ws.webSocket(wsUrl) {
+                for (frame in incoming) {
+                    if (frame !is Frame.Text) continue
+                    val message = json.parseToJsonElement(frame.readText()).jsonObject
+                    when ((message["type"] as? JsonPrimitive)?.contentOrNull) {
+                        "auth_required" -> send(
+                            Frame.Text(
+                                buildJsonObject {
+                                    put("type", "auth")
+                                    put("access_token", server.token)
+                                }.toString(),
+                            ),
+                        )
+                        "auth_invalid" -> {
+                            failure = "Invalid token."
+                            close()
+                            break
+                        }
+                        "auth_ok" -> send(Frame.Text(command.toString()))
+                        "result" -> {
+                            result = message["result"] as? JsonObject
+                            if ((message["success"] as? JsonPrimitive)?.contentOrNull != "true") {
+                                failure = (message["error"] as? JsonObject)
+                                    ?.let { (it["message"] as? JsonPrimitive)?.contentOrNull }
+                                    ?: "Command failed."
+                            }
+                            close()
+                            break
+                        }
+                    }
+                }
+            }
+        } finally {
+            ws.close()
+        }
+        failure?.let { error(it) }
+        return result
+    }
 
     /** The instance's zones, for geofencing arrivals and departures. */
     suspend fun fetchZones(): Result<List<HaZone>> = runCatching {
@@ -350,5 +431,9 @@ class HaClient(private val server: ServerConfig) {
         // No evictAll here: closing pooled TLS sockets performs network I/O and
         // crashes with NetworkOnMainThreadException when called from main.
         runCatching { http.dispatcher.executorService.shutdown() }
+    }
+
+    private companion object {
+        const val PIPELINES_COMMAND_ID = 30
     }
 }

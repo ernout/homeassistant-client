@@ -138,6 +138,14 @@ private val BRIGHTNESS_MODES = setOf(
     "brightness", "color_temp", "hs", "rgb", "rgbw", "rgbww", "white", "xy",
 )
 
+/** One of HA's Assist pipelines, as offered in Settings > Voice assistants. */
+data class AssistPipeline(
+    val id: String,
+    val name: String,
+    val conversationEngine: String?,
+    val preferred: Boolean,
+)
+
 data class AssistReply(
     val speech: String,
     val conversationId: String?,
