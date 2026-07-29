@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ImageBitmap
@@ -260,7 +261,10 @@ class MapScreen(
                 ) {
                     val view = mapView
                     if (view != null && view.tiles.isNotEmpty()) {
-                        MapCanvas(view, markers, home, Modifier.fillMaxSize())
+                        // Tiles are drawn past the viewport edges, and a
+                        // DrawScope doesn't clip on its own, so they would
+                        // otherwise paint over the top bar and the list.
+                        MapCanvas(view, markers, home, Modifier.fillMaxSize().clipToBounds())
                     } else {
                         LightText(
                             text = error ?: "Loading map…",

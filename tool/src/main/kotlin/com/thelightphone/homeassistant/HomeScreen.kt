@@ -54,9 +54,17 @@ class HomeViewModel(
 
     val live = MutableStateFlow(false)
 
+    /** Entity waiting for a confirming second tap, if any. */
+    val pendingConfirm = MutableStateFlow<String?>(null)
+    private var confirmTimeout: kotlinx.coroutines.Job? = null
+
     private var client: HaClient? = null
     private var clientConfig: ServerConfig? = null
     private var liveConnection: HaLiveConnection? = null
+
+    private companion object {
+        const val CONFIRM_WINDOW_MILLIS = 5_000L
+    }
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
         super.onScreenShow(screen)
@@ -245,7 +253,22 @@ class HomeViewModel(
     fun tap(entityId: String) {
         val active = client ?: return
         val domain = entityId.substringBefore(".")
-        val action = HaActions.actionFor(domain, states.value[entityId]?.state) ?: return
+        val state = states.value[entityId]?.state
+
+        // Opening a lock takes two taps, so a pocket press can't unlock a door.
+        if (HaActions.needsConfirmation(domain, state) && pendingConfirm.value != entityId) {
+            pendingConfirm.value = entityId
+            confirmTimeout?.cancel()
+            confirmTimeout = viewModelScope.launch {
+                kotlinx.coroutines.delay(CONFIRM_WINDOW_MILLIS)
+                if (pendingConfirm.value == entityId) pendingConfirm.value = null
+            }
+            return
+        }
+        pendingConfirm.value = null
+        confirmTimeout?.cancel()
+
+        val action = HaActions.actionFor(domain, state) ?: return
         viewModelScope.launch {
             active.callService(action, entityId)
                 .onFailure { error.value = it.message }
@@ -301,6 +324,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         val error by viewModel.error.collectAsState()
         val loading by viewModel.loading.collectAsState()
         val live by viewModel.live.collectAsState()
+        val pendingConfirm by viewModel.pendingConfirm.collectAsState()
 
         LightTheme(colors = themeColors) {
             Column(
@@ -311,7 +335,9 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 when (hasServers) {
                     null -> Unit
                     false -> EmptyState()
-                    true -> Dashboard(server, views, viewIndex, states, error, loading, live)
+                    true -> Dashboard(
+                        server, views, viewIndex, states, error, loading, live, pendingConfirm,
+                    )
                 }
             }
         }
@@ -350,6 +376,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         error: String?,
         loading: Boolean,
         live: Boolean,
+        pendingConfirm: String?,
     ) {
         val view = views.getOrNull(viewIndex)
         val centerText = buildString {
@@ -414,7 +441,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                         lighten = true,
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
-                    is DashRow.Entity -> EntityRow(row, states)
+                    is DashRow.Entity -> EntityRow(row, states, pendingConfirm)
                     is DashRow.Map -> LinkRow(row.title) { openMap(row.entityIds, row.title) }
                     is DashRow.Navigate -> LinkRow(row.title) { viewModel.openViewByPath(row.path) }
                 }
@@ -442,7 +469,11 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
     }
 
     @Composable
-    private fun EntityRow(row: DashRow.Entity, states: Map<String, HaState>) {
+    private fun EntityRow(
+        row: DashRow.Entity,
+        states: Map<String, HaState>,
+        pendingConfirm: String?,
+    ) {
         val state = states[row.entityId]
         val domain = row.entityId.substringBefore(".")
         val isCamera = domain == "camera"
@@ -471,6 +502,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             )
             LightText(
                 text = when {
+                    pendingConfirm == row.entityId -> confirmLabel(domain)
                     isCamera -> "▸"
                     HaActions.isRunAction(domain) -> "▷"
                     else -> HaActions.stateLabel(state)
@@ -492,6 +524,9 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         val server = viewModel.server.value ?: return
         navigateTo(screenFactory = { CameraScreen(it, server, entityId, label) })
     }
+
+    private fun confirmLabel(domain: String) =
+        if (domain == "lock") "Unlock?" else "Disarm?"
 
     private fun openDetail(entityId: String, label: String) {
         val server = viewModel.server.value ?: return

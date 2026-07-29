@@ -235,6 +235,16 @@ object HaActions {
         }
     }
 
+    /**
+     * True when an action opens something up and so deserves a second tap:
+     * unlocking a door, disarming an alarm. Closing or arming never asks.
+     */
+    fun needsConfirmation(domain: String, state: String?): Boolean = when (domain) {
+        "lock" -> state == "locked"
+        "alarm_control_panel" -> state?.startsWith("armed") == true
+        else -> false
+    }
+
     /** Domains that render as a "run" action instead of a state. */
     fun isRunAction(domain: String): Boolean =
         domain in setOf("scene", "script", "button", "input_button", "automation")
