@@ -12,7 +12,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -66,27 +72,32 @@ class MapViewModel(
         val longitude: Double,
         val distanceMeters: Double,
     ) {
-        /** First letter of the name, as HA's own map markers use. */
-        val initial: String get() = label.trim().take(1).uppercase().ifBlank { "?" }
+        /**
+         * The same label HA's own map markers use: the first letter of each
+         * word, capped at three characters (see ha-map.ts).
+         */
+        val initial: String
+            get() = label.trim()
+                .split(" ")
+                .mapNotNull { it.firstOrNull() }
+                .joinToString("")
+                .take(3)
+                .ifBlank { "?" }
     }
 
-    data class Tile(val image: ImageBitmap, val column: Int, val row: Int)
+    /** One tile, positioned by its absolute tile coordinates. */
+    data class Tile(val image: ImageBitmap, val tileX: Int, val tileY: Int)
 
-    /** Everything the canvas needs: tiles plus the projection they were drawn with. */
-    data class MapView(
-        val tiles: List<Tile>,
-        val zoom: Int,
-        val originTileX: Int,
-        val originTileY: Int,
-        val columns: Int,
-        val rows: Int,
-    )
+    data class MapView(val tiles: List<Tile>, val viewport: MapViewport)
 
     val markers = MutableStateFlow<List<Marker>>(emptyList())
     val mapView = MutableStateFlow<MapView?>(null)
+    val viewport = MutableStateFlow<MapViewport?>(null)
     val error = MutableStateFlow<String?>(null)
     val loading = MutableStateFlow(false)
     val home = MutableStateFlow<Pair<Double, Double>?>(null)
+
+    private var loadJob: kotlinx.coroutines.Job? = null
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
         super.onScreenShow(screen)
@@ -119,36 +130,48 @@ class MapViewModel(
         }
     }
 
-    /** Picks a zoom that fits every marker, then fetches the surrounding tiles. */
+    /** Frames every marker plus home, then loads the tiles for that viewport. */
     private suspend fun loadTiles(found: List<Marker>, homeCoordinates: Pair<Double, Double>) {
         val positions = found.map { it.latitude to it.longitude } + homeCoordinates
         val zoom = MapTiles.fitZoom(positions, viewportTiles = GRID.toDouble())
-        val centreLatitude = positions.map { it.first }.average()
-        val centreLongitude = positions.map { it.second }.average()
+        viewport.value = MapViewport.centredOn(
+            latitude = positions.map { it.first }.average(),
+            longitude = positions.map { it.second }.average(),
+            zoom = zoom,
+        )
+        loadViewport()
+    }
 
-        val centreX = MapTiles.tileX(centreLongitude, zoom)
-        val centreY = MapTiles.tileY(centreLatitude, zoom)
-        val originTileX = MapTiles.floorInt(centreX - GRID / 2.0)
-        val originTileY = MapTiles.floorInt(centreY - GRID / 2.0)
+    /** Pans and pinches funnel through here; tiles are cached, so this is cheap. */
+    fun moveTo(next: MapViewport) {
+        viewport.value = next
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch { loadViewport() }
+    }
+
+    private suspend fun loadViewport() {
+        val current = viewport.value ?: return
+        // Enough tiles to cover the screen around the centre, plus a ring of
+        // margin so a pan doesn't immediately hit empty space.
+        val half = GRID / 2 + 1
+        val centreTileX = MapTiles.floorInt(current.centreTileX)
+        val centreTileY = MapTiles.floorInt(current.centreTileY)
 
         val loaded = mutableListOf<Tile>()
-        for (column in 0 until GRID) {
-            for (row in 0 until GRID) {
-                tiles.tile(zoom, originTileX + column, originTileY + row)?.let {
-                    loaded += Tile(it.asImageBitmap(), column, row)
+        for (dx in -half..half) {
+            for (dy in -half..half) {
+                val tileX = centreTileX + dx
+                val tileY = centreTileY + dy
+                tiles.tile(current.zoom, tileX, tileY)?.let {
+                    loaded += Tile(it.asImageBitmap(), tileX, tileY)
+                }
+                // Publish as they arrive so the map fills in progressively.
+                if (loaded.isNotEmpty()) {
+                    mapView.value = MapView(loaded.toList(), current)
                 }
             }
         }
         tiles.trimCache()
-
-        mapView.value = MapView(
-            tiles = loaded,
-            zoom = zoom,
-            originTileX = originTileX,
-            originTileY = originTileY,
-            columns = GRID,
-            rows = GRID,
-        )
         if (loaded.isEmpty() && error.value == null) error.value = "Could not load map tiles."
     }
 
@@ -295,36 +318,63 @@ class MapScreen(
     ) {
         val content = LightThemeTokens.colors.content
         val background = LightThemeTokens.colors.background
-        Canvas(modifier = modifier) {
-            val gridPixels = view.columns * MapTiles.TILE_SIZE.toFloat()
-            // Cover the canvas, cropping the overflow rather than letterboxing.
-            val scale = maxOf(size.width / gridPixels, size.height / gridPixels)
-            val drawnSize = gridPixels * scale
-            val offsetX = (size.width - drawnSize) / 2
-            val offsetY = (size.height - drawnSize) / 2
-            val tilePixels = (MapTiles.TILE_SIZE * scale).roundToInt()
+        val viewport = view.viewport
+        // Accumulate gestures locally and hand whole tiles to the loader, so a
+        // drag feels immediate without refetching on every frame.
+        var pendingPan by remember(viewport.zoom) { mutableStateOf(Offset.Zero) }
+        var pendingScale by remember(viewport.zoom) { mutableFloatStateOf(1f) }
+
+        Canvas(
+            modifier = modifier
+                .pointerInput(viewport.zoom) {
+                    detectTransformGestures { _, pan, gestureZoom, _ ->
+                        pendingPan += pan
+                        pendingScale *= gestureZoom
+                        // A pinch past a full doubling/halving steps the tile zoom.
+                        when {
+                            pendingScale >= 2f -> {
+                                viewModel.moveTo(viewport.zoomedTo(viewport.zoom + 1))
+                                pendingScale = 1f
+                                pendingPan = Offset.Zero
+                            }
+                            pendingScale <= 0.5f -> {
+                                viewModel.moveTo(viewport.zoomedTo(viewport.zoom - 1))
+                                pendingScale = 1f
+                                pendingPan = Offset.Zero
+                            }
+                            // Committing per tile keeps tile fetches sane.
+                            pendingPan.getDistance() > MapTiles.TILE_SIZE / 2f -> {
+                                viewModel.moveTo(viewport.panBy(pendingPan.x, pendingPan.y, 1f))
+                                pendingPan = Offset.Zero
+                            }
+                        }
+                    }
+                },
+        ) {
+            val scale = pendingScale
+            val centre = Offset(size.width / 2, size.height / 2)
+            val tilePixels = MapTiles.TILE_SIZE * scale
+
+            fun screenOf(tileX: Double, tileY: Double) = Offset(
+                x = centre.x + ((tileX - viewport.centreTileX) * tilePixels).toFloat() + pendingPan.x,
+                y = centre.y + ((tileY - viewport.centreTileY) * tilePixels).toFloat() + pendingPan.y,
+            )
 
             view.tiles.forEach { tile ->
+                val topLeft = screenOf(tile.tileX.toDouble(), tile.tileY.toDouble())
                 drawImage(
                     image = tile.image,
                     srcOffset = IntOffset.Zero,
                     srcSize = IntSize(tile.image.width, tile.image.height),
-                    dstOffset = IntOffset(
-                        (offsetX + tile.column * MapTiles.TILE_SIZE * scale).roundToInt(),
-                        (offsetY + tile.row * MapTiles.TILE_SIZE * scale).roundToInt(),
-                    ),
-                    dstSize = IntSize(tilePixels, tilePixels),
+                    dstOffset = IntOffset(topLeft.x.roundToInt(), topLeft.y.roundToInt()),
+                    dstSize = IntSize(tilePixels.roundToInt(), tilePixels.roundToInt()),
                 )
             }
 
-            fun project(latitude: Double, longitude: Double): Offset {
-                val x = MapTiles.tileX(longitude, view.zoom) - view.originTileX
-                val y = MapTiles.tileY(latitude, view.zoom) - view.originTileY
-                return Offset(
-                    x = offsetX + (x * MapTiles.TILE_SIZE * scale).toFloat(),
-                    y = offsetY + (y * MapTiles.TILE_SIZE * scale).toFloat(),
-                )
-            }
+            fun project(latitude: Double, longitude: Double) = screenOf(
+                MapTiles.tileX(longitude, viewport.zoom),
+                MapTiles.tileY(latitude, viewport.zoom),
+            )
 
             home?.let { (latitude, longitude) ->
                 val position = project(latitude, longitude)
@@ -343,8 +393,7 @@ class MapScreen(
             }
 
             markers.forEach { marker ->
-                val position = project(marker.latitude, marker.longitude)
-                drawPin(position, marker.initial, content, background)
+                drawPin(project(marker.latitude, marker.longitude), marker.initial, content, background)
             }
         }
     }
@@ -359,7 +408,7 @@ class MapScreen(
         content: androidx.compose.ui.graphics.Color,
         background: androidx.compose.ui.graphics.Color,
     ) {
-        val radius = 30f
+        val radius = if (initial.length > 1) 36f else 30f
         drawCircle(color = content, radius = radius, center = position)
         drawCircle(
             color = background,
@@ -371,7 +420,7 @@ class MapScreen(
             val paint = android.graphics.Paint().apply {
                 isAntiAlias = true
                 color = background.toArgb()
-                textSize = radius * 1.1f
+                textSize = if (initial.length > 2) radius * 0.8f else radius * 1.05f
                 textAlign = android.graphics.Paint.Align.CENTER
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
             }
