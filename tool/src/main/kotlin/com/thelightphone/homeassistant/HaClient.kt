@@ -106,6 +106,37 @@ class HaClient(private val server: ServerConfig) {
         latitude to longitude
     }
 
+    /**
+     * Sends a sentence to HA's conversation agent. Passing back the
+     * conversation id keeps a follow-up question in the same context.
+     */
+    suspend fun converse(
+        text: String,
+        conversationId: String? = null,
+        language: String? = null,
+    ): Result<AssistReply> = runCatching {
+        val body = buildJsonObject {
+            put("text", text)
+            conversationId?.let { put("conversation_id", it) }
+            language?.let { put("language", it) }
+        }.toString()
+        val response = json.parseToJsonElement(post("/api/conversation/process", body)).jsonObject
+        AssistReply(
+            speech = response.speechText() ?: "…",
+            conversationId = (response["conversation_id"] as? JsonPrimitive)?.contentOrNull,
+            continueConversation =
+                (response["continue_conversation"] as? JsonPrimitive)?.contentOrNull == "true",
+        )
+    }
+
+    private fun JsonObject.speechText(): String? =
+        ((this["response"] as? JsonObject)
+            ?.get("speech") as? JsonObject)
+            ?.get("plain")
+            ?.let { it as? JsonObject }
+            ?.get("speech")
+            ?.let { (it as? JsonPrimitive)?.contentOrNull }
+
     /** The instance's zones, for geofencing arrivals and departures. */
     suspend fun fetchZones(): Result<List<HaZone>> = runCatching {
         json.decodeFromString<List<HaState>>(get("/api/states"))
@@ -121,6 +152,23 @@ class HaClient(private val server: ServerConfig) {
                     radiusMeters = (zone.number("radius") ?: 100.0).toFloat(),
                 )
             }
+    }
+
+    /** Downloads a file (a TTS answer, say) into the tool's own storage. */
+    suspend fun download(url: String, target: java.io.File): Result<java.io.File> = runCatching {
+        withContext(Dispatchers.IO) {
+            val request = if (url.startsWith(baseUrl)) {
+                Request.Builder().url(url).header("Authorization", "Bearer ${server.token}")
+            } else {
+                Request.Builder().url(url)
+            }
+            http.newCall(request.get().build()).execute().use { response ->
+                if (!response.isSuccessful) error("Download: HTTP ${response.code}")
+                val bytes = response.body?.bytes() ?: error("Empty download.")
+                target.writeBytes(bytes)
+                target
+            }
+        }
     }
 
     /** Fetches a still frame for a camera entity as JPEG bytes. */

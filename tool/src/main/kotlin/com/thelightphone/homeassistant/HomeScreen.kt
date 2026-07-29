@@ -21,6 +21,7 @@ import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.ui.LightBarButton
+import com.thelightphone.sdk.ui.LightBottomBar
 import com.thelightphone.sdk.ui.LightIcons
 import com.thelightphone.sdk.ui.LightText
 import com.thelightphone.sdk.ui.LightTextVariant
@@ -396,7 +397,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
     }
 
     @Composable
-    private fun Dashboard(
+    private fun androidx.compose.foundation.layout.ColumnScope.Dashboard(
         server: ServerConfig?,
         views: List<DashView>,
         viewIndex: Int,
@@ -454,7 +455,11 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             return
         }
 
-        LazyColumn(modifier = Modifier.padding(horizontal = 1f.gridUnitsAsDp())) {
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 1f.gridUnitsAsDp()),
+        ) {
             items(view.rows) { row ->
                 when (row) {
                     is DashRow.Header -> LightText(
@@ -475,6 +480,12 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 }
             }
         }
+
+        LightBottomBar(
+            items = listOf(
+                LightBarButton.Text(text = "Assist", onClick = { openAssist() }),
+            ),
+        )
     }
 
     /** A row that leads somewhere else: another view, a map, a camera. */
@@ -546,6 +557,11 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             screenFactory = { SetupScreen(it, existing) },
             resultCallback = { saved -> if (saved == true) viewModel.reload() },
         )
+    }
+
+    private fun openAssist() {
+        val server = viewModel.server.value ?: return
+        navigateTo(screenFactory = { AssistScreen(it, server) })
     }
 
     private fun openCamera(entityId: String, label: String) {

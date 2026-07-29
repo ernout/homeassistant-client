@@ -74,9 +74,6 @@ data class HaState(
                 ?.any { (it as? JsonPrimitive)?.contentOrNull in BRIGHTNESS_MODES } == true
 }
 
-// Not a companion object inside HaState: kotlinx.serialization resolves the
-// serializer through HaState.Companion, so declaring a private one there makes
-// it inaccessible to callers at runtime.
 /** Arm modes an alarm panel advertises through supported_features. */
 object AlarmModes {
     private const val ARM_HOME = 1
@@ -134,8 +131,17 @@ private val BINARY_SENSOR_LABELS: Map<String, Pair<String, String>> = mapOf(
     "window" to ("Open" to "Closed"),
 )
 
+// Not a companion object inside HaState: kotlinx.serialization resolves the
+// serializer through HaState.Companion, so declaring a private one there makes
+// it inaccessible to callers at runtime.
 private val BRIGHTNESS_MODES = setOf(
     "brightness", "color_temp", "hs", "rgb", "rgbw", "rgbww", "white", "xy",
+)
+
+data class AssistReply(
+    val speech: String,
+    val conversationId: String?,
+    val continueConversation: Boolean,
 )
 
 data class HaZone(
