@@ -61,13 +61,14 @@ data class HaState(
         get() = attributes["brightness"] != null ||
             (attributes["supported_color_modes"] as? JsonArray)
                 ?.any { (it as? JsonPrimitive)?.contentOrNull in BRIGHTNESS_MODES } == true
-
-    private companion object {
-        val BRIGHTNESS_MODES = setOf(
-            "brightness", "color_temp", "hs", "rgb", "rgbw", "rgbww", "white", "xy",
-        )
-    }
 }
+
+// Not a companion object inside HaState: kotlinx.serialization resolves the
+// serializer through HaState.Companion, so declaring a private one there makes
+// it inaccessible to callers at runtime.
+private val BRIGHTNESS_MODES = setOf(
+    "brightness", "color_temp", "hs", "rgb", "rgbw", "rgbww", "white", "xy",
+)
 
 /** One row on a rendered dashboard screen. */
 sealed class DashRow {
