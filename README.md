@@ -41,6 +41,8 @@ Tested on a Light Phone III against a live Home Assistant instance.
 - **Local HTTP instances**: blocked by the generated manifest, see above
 - Battery, location, motion and geofencing rely on primitives added to `sdk/client` in the `private-build` branch, because the SDK doesn't expose them yet. The `home-assistant-tool` branch stays within the sandbox and does without.
 
+Things we ran into that need Light's side to change — bugs, missing primitives, open questions — are collected in [LIGHT-SDK-FEEDBACK.md](LIGHT-SDK-FEEDBACK.md).
+
 The app code lives in [`tool/src/main/kotlin/com/thelightphone/homeassistant/`](tool/src/main/kotlin/com/thelightphone/homeassistant/). See [PLAN.md](PLAN.md) for the full research, architecture and phase plan (in Dutch).
 
 This repo is a fork-style copy of Light's [light-sdk](https://github.com/lightphone/light-sdk) scaffold — their original README follows below.
