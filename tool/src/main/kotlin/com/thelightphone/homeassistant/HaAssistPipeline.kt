@@ -104,7 +104,7 @@ class HaAssistPipeline(
                                         ?.get("stt_binary_handler_id") as? JsonPrimitive)
                                         ?.contentOrNull?.toIntOrNull() ?: continue
                                     onListening()
-                                    streamMicrophone(handlerId)
+                                    streamMicrophone(handlerId, onError)
                                 }
                                 "stt-end" -> {
                                     captureJob?.cancel()
@@ -154,6 +154,7 @@ class HaAssistPipeline(
     /** Pumps microphone buffers up the socket until stopped or cancelled. */
     private fun io.ktor.client.plugins.websocket.DefaultClientWebSocketSession.streamMicrophone(
         handlerId: Int,
+        onError: (String) -> Unit,
     ) {
         captureJob = scope.launch {
             val capture = audio.newCapture(CaptureConfig(sampleRate = SAMPLE_RATE))
@@ -167,7 +168,10 @@ class HaAssistPipeline(
                     }
                     send(Frame.Binary(true, byteArrayOf(handlerId.toByte()) + samples.toBytes()))
                 }
-            }.onFailure { android.util.Log.w("HomeTool", "assist capture: ${it.message}") }
+            }.onFailure { failure ->
+                android.util.Log.w("HomeTool", "assist capture: ${failure.message}")
+                onError(failure.message ?: "Could not use the microphone.")
+            }
         }
     }
 

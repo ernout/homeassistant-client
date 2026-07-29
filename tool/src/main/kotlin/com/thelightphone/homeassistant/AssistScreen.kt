@@ -21,10 +21,7 @@ import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.audio.LightAudio
-import com.thelightphone.sdk.checkPermission
 import com.thelightphone.sdk.rememberPermissionRequestLauncher
-import com.thelightphone.sdk.shared.LightServiceMethod
-import com.thelightphone.sdk.shared.asKotlinResult
 import com.thelightphone.sdk.ui.LightBarButton
 import com.thelightphone.sdk.ui.LightBottomBar
 import com.thelightphone.sdk.ui.LightIcons
@@ -59,6 +56,7 @@ class AssistViewModel(
     private var client: HaClient? = null
     private var pipeline: HaAssistPipeline? = null
     private var conversationId: String? = null
+    private var permissionPrompt: com.thelightphone.sdk.PermissionRequestLauncher? = null
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
         super.onScreenShow(screen)
@@ -90,8 +88,17 @@ class AssistViewModel(
         }
     }
 
-    fun startListening() {
+    /**
+     * Starts recording without asking LightOS first. Its permission service
+     * currently answers "not grantable" for RECORD_AUDIO even when the OS has
+     * granted it, so the microphone itself is the only reliable authority:
+     * try, and offer the prompt only if capture is genuinely refused.
+     */
+    fun startListening(
+        permissionPrompt: com.thelightphone.sdk.PermissionRequestLauncher? = null,
+    ) {
         if (voice.value != Voice.IDLE) return
+        this.permissionPrompt = permissionPrompt
         voice.value = Voice.CONNECTING
         error.value = null
         val runner = HaAssistPipeline(server, audio, viewModelScope)
@@ -109,7 +116,12 @@ class AssistViewModel(
                     turns.value = turns.value + Turn(reply.speech, fromUser = false)
                 },
                 onSpeech = { url -> play(url) },
-                onError = { error.value = it },
+                onError = { message ->
+                    error.value = message
+                    if (message.contains("permission", ignoreCase = true)) {
+                        runCatching { this@AssistViewModel.permissionPrompt?.launch() }
+                    }
+                },
             )
             voice.value = Voice.IDLE
             pipeline = null
@@ -240,7 +252,7 @@ class AssistScreen(
                                 if (voice == AssistViewModel.Voice.LISTENING) {
                                     viewModel.stopListening()
                                 } else {
-                                    listenWithPermission(microphone)
+                                    viewModel.startListening(microphone)
                                 }
                             },
                         ),
@@ -257,19 +269,4 @@ class AssistScreen(
         )
     }
 
-    /** LightOS grants the microphone through its own prompt, not ours. */
-    private fun listenWithPermission(
-        launcher: com.thelightphone.sdk.PermissionRequestLauncher?,
-    ) {
-        viewModel.viewModelScope.launch {
-            val granted = checkPermission(Manifest.permission.RECORD_AUDIO).asKotlinResult
-                .map { it.permissionResult == LightServiceMethod.GetPermission.Result.Granted }
-                .getOrElse { true }
-            if (!granted) {
-                runCatching { launcher?.launch() }
-                return@launch
-            }
-            viewModel.startListening()
-        }
-    }
 }
