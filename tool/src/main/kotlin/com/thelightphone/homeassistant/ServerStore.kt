@@ -52,8 +52,12 @@ class ServerStore(
         dataStore.edit {
             if (it[SELECTED] == serverId) it.remove(SELECTED)
         }
-        // Nothing left worth protecting; drop the caches with it.
-        if (all.isEmpty()) clearCaches()
+        // Nothing left worth protecting: drop the caches, then the key itself,
+        // so any leftover bytes on disk stay unreadable for good.
+        if (all.isEmpty()) {
+            clearCaches()
+            vault.destroy()
+        }
     }
 
     private suspend fun writeServers(all: List<ServerConfig>) {

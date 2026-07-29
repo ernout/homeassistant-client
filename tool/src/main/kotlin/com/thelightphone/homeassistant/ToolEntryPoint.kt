@@ -23,7 +23,8 @@ object ToolEntryPoint : LightEntryPoint {
         data: ByteArray,
     ) {
         // Phase 4: HA posts its notification JSON to the push endpoint; decode
-        // and display it via LightPushService here.
-        Log.d("HomeTool", "Push notification: ${data.decodeToString().take(200)}")
+        // and display it via LightPushService here. Log the size only —  the
+        // payload is the notification's contents.
+        Log.d("HomeTool", "Push notification received (${data.size} bytes)")
     }
 }
