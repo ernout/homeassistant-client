@@ -81,6 +81,32 @@ class ServerStore(private val dataStore: DataStore<Preferences>) {
 
     private fun statesKey(serverId: String) = stringPreferencesKey("states_$serverId")
 
+    /** Scratch state for the reporting job: last sent fix, current cadence. */
+    suspend fun reportingState(): Map<String, String> {
+        val prefs = dataStore.data.first()
+        return listOf("lat", "lon", "interval", "stillReported", "lastSent")
+            .mapNotNull { key -> prefs[reportingKey(key)]?.let { key to it } }
+            .toMap()
+    }
+
+    suspend fun saveReportingState(
+        latitude: Double?,
+        longitude: Double?,
+        intervalMinutes: Int,
+        reportedWhileStill: Boolean,
+        lastSentAtMillis: Long,
+    ) {
+        dataStore.edit { prefs ->
+            latitude?.let { prefs[reportingKey("lat")] = it.toString() }
+            longitude?.let { prefs[reportingKey("lon")] = it.toString() }
+            prefs[reportingKey("interval")] = intervalMinutes.toString()
+            prefs[reportingKey("stillReported")] = reportedWhileStill.toString()
+            prefs[reportingKey("lastSent")] = lastSentAtMillis.toString()
+        }
+    }
+
+    private fun reportingKey(name: String) = stringPreferencesKey("reporting_$name")
+
     /** Stable device id for mobile_app registrations, generated once. */
     suspend fun deviceId(): String {
         dataStore.data.first()[DEVICE_ID]?.let { return it }

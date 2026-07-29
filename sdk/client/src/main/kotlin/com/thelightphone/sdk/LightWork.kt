@@ -132,12 +132,14 @@ object LightWork {
         jobKey: String,
         inputData: Map<String, String> = emptyMap(),
         tag: String? = null,
+        initialDelay: Duration? = null,
     ): Boolean {
         if (LightSdkRegistry.jobs[jobKey] == null) return false
 
         val payload = inputData.toMutableMap().also { it[LIGHT_JOB_KEY_PARAM] = jobKey }.toData()
         val request = OneTimeWorkRequestBuilder<LightJobWorkManagerWrapper>()
             .setInputData(payload)
+            .apply { initialDelay?.let { setInitialDelay(it.toJavaDuration()) } }
             .build()
         WorkManager.getInstance(lightContext.androidContext).enqueueUniqueWork(
             tag ?: jobKey,

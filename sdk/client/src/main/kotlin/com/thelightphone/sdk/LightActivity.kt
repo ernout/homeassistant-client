@@ -226,6 +226,7 @@ class SealedLightContext(internal val androidContext: Context) {
     val fileShare: LightFileShare by lazy { LightFileShare(androidContext) }
     val battery: LightBattery by lazy { LightBattery(androidContext) }
     val location: LightLocation by lazy { LightLocation(androidContext) }
+    val motion: LightMotion by lazy { LightMotion(androidContext) }
     fun readAsset(path: String): ByteArray = androidContext.assets.open(path).use { it.readBytes() }
 }
 /**

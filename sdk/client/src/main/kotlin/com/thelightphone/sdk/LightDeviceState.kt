@@ -5,9 +5,14 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -36,6 +41,57 @@ class LightBattery internal constructor(private val androidContext: Context) {
         val manager = androidContext.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
             ?: return null
         return manager.isCharging
+    }
+}
+
+/**
+ * Cheap "is the phone moving?" check via the accelerometer.
+ *
+ * Sampling motion for a couple of seconds costs a fraction of what a GPS fix
+ * costs, so a job can use this to decide whether acquiring a position is worth
+ * it at all. Needs no permission.
+ */
+class LightMotion internal constructor(private val androidContext: Context) {
+
+    /**
+     * Samples the accelerometer for [durationMillis] and reports whether the
+     * readings vary more than [thresholdMs2] — a phone on a desk sits near
+     * zero, a phone being carried does not. Returns null if there is no
+     * accelerometer or no samples arrived.
+     */
+    suspend fun isMoving(
+        durationMillis: Long = 2_500,
+        thresholdMs2: Double = 0.35,
+    ): Boolean? {
+        val manager = androidContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            ?: return null
+        val sensor = manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) ?: return null
+
+        val magnitudes = mutableListOf<Double>()
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                val (x, y, z) = Triple(event.values[0], event.values[1], event.values[2])
+                magnitudes += kotlin.math.sqrt((x * x + y * y + z * z).toDouble())
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+
+        return try {
+            manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+            delay(durationMillis)
+            if (magnitudes.size < 3) return null
+            // Standard deviation of total acceleration: gravity cancels out, so
+            // only actual movement shows up.
+            val mean = magnitudes.average()
+            val variance = magnitudes.sumOf { (it - mean) * (it - mean) } / magnitudes.size
+            kotlin.math.sqrt(variance) > thresholdMs2
+        } catch (error: Exception) {
+            Log.w("LightMotion", "accelerometer sampling failed: ${error.message}")
+            null
+        } finally {
+            runCatching { manager.unregisterListener(listener) }
+        }
     }
 }
 
