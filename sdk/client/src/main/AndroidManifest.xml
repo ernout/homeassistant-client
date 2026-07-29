@@ -8,6 +8,13 @@
             android:name="com.thelightphone.sdk.LightFileProvider"
             android:authorities="${applicationId}.lightfiles"
             android:exported="true" />
+        <receiver
+            android:name="com.thelightphone.sdk.LightGeofenceReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.thelightphone.sdk.PROXIMITY_ALERT" />
+            </intent-filter>
+        </receiver>
         <service android:name="com.thelightphone.sdk.LightPushService"
             android:exported="false">
             <intent-filter>

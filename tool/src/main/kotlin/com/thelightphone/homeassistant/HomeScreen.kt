@@ -277,12 +277,15 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         super.willShow()
         // Keep the background reporting job in sync with the current toggles.
         viewModel.viewModelScope.launch {
-            val reporting = ServerStore(lightContext.dataStore).servers()
-                .any { it.webhookId != null && (it.sendLocation || it.sendBattery) }
-            if (reporting) {
-                scheduleLocationReporting(lightContext)
-            } else {
+            val servers = ServerStore(lightContext.dataStore).servers()
+                .filter { it.webhookId != null && (it.sendLocation || it.sendBattery) }
+            if (servers.isEmpty()) {
                 cancelLocationReporting(lightContext)
+                return@launch
+            }
+            scheduleLocationReporting(lightContext)
+            servers.firstOrNull { it.sendLocation }?.let {
+                refreshZoneGeofences(lightContext, it)
             }
         }
     }

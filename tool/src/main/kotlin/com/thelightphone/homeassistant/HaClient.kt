@@ -106,6 +106,23 @@ class HaClient(private val server: ServerConfig) {
         latitude to longitude
     }
 
+    /** The instance's zones, for geofencing arrivals and departures. */
+    suspend fun fetchZones(): Result<List<HaZone>> = runCatching {
+        json.decodeFromString<List<HaState>>(get("/api/states"))
+            .filter { it.domain == "zone" }
+            .mapNotNull { zone ->
+                val latitude = zone.number("latitude") ?: return@mapNotNull null
+                val longitude = zone.number("longitude") ?: return@mapNotNull null
+                HaZone(
+                    entityId = zone.entity_id,
+                    name = zone.friendlyName,
+                    latitude = latitude,
+                    longitude = longitude,
+                    radiusMeters = (zone.number("radius") ?: 100.0).toFloat(),
+                )
+            }
+    }
+
     /** Fetches a still frame for a camera entity as JPEG bytes. */
     suspend fun cameraSnapshot(entityId: String): Result<ByteArray> = runCatching {
         withContext(Dispatchers.IO) {

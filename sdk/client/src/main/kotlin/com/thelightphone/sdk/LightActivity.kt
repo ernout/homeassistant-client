@@ -227,6 +227,7 @@ class SealedLightContext(internal val androidContext: Context) {
     val battery: LightBattery by lazy { LightBattery(androidContext) }
     val location: LightLocation by lazy { LightLocation(androidContext) }
     val motion: LightMotion by lazy { LightMotion(androidContext) }
+    val geofence: LightGeofence by lazy { LightGeofence(androidContext) }
     fun readAsset(path: String): ByteArray = androidContext.assets.open(path).use { it.readBytes() }
 }
 /**

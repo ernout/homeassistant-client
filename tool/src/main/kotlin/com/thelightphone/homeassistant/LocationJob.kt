@@ -26,7 +26,7 @@ const val LOCATION_JOB_KEY = "report-location"
  * parked.
  */
 @LightJob(LOCATION_JOB_KEY)
-val reportLocationJob: LightJobHandler = { lightContext, _ ->
+val reportLocationJob: LightJobHandler = { lightContext, input ->
     val store = ServerStore(lightContext.dataStore)
     val servers = store.servers()
         .filter { it.webhookId != null && (it.sendLocation || it.sendBattery) }
@@ -39,9 +39,17 @@ val reportLocationJob: LightJobHandler = { lightContext, _ ->
         val charging = lightContext.battery.isCharging() ?: false
         val wantsLocation = servers.any { it.sendLocation }
 
+        // A zone crossing is exactly the moment automations care about, so it
+        // overrides both the motion check and the distance filter.
+        val crossedZone = input["fence"] != null
+
         // Null (no accelerometer) counts as moving, so a missing sensor never
         // silently disables reporting.
-        val moving = if (wantsLocation) lightContext.motion.isMoving() ?: true else false
+        val moving = when {
+            !wantsLocation -> false
+            crossedZone -> true
+            else -> lightContext.motion.isMoving() ?: true
+        }
 
         // Still and already reported from here? Then leave the receiver alone.
         val needsFix = wantsLocation &&
@@ -54,7 +62,7 @@ val reportLocationJob: LightJobHandler = { lightContext, _ ->
 
         val movedFar = usableFix != null && tracking.movedFrom(usableFix) >= MIN_DISTANCE_METERS
         val sendLocation = usableFix != null &&
-            (movedFar || !tracking.reportedWhileStill || tracking.isStale())
+            (crossedZone || movedFar || !tracking.reportedWhileStill || tracking.isStale())
 
         var anyFailed = false
         servers.forEach { server ->
@@ -180,6 +188,35 @@ private fun nextDelay(
 fun scheduleLocationReporting(lightContext: SealedLightContext) {
     LightWork.enqueue(lightContext, LOCATION_JOB_KEY)
 }
+
+/**
+ * Registers proximity alerts for the instance's zones, so arriving somewhere
+ * reports immediately instead of waiting out the polling interval. Limited to
+ * the nearest few zones — each fence costs the platform some polling.
+ */
+suspend fun refreshZoneGeofences(lightContext: SealedLightContext, server: ServerConfig) {
+    val client = HaClient(server)
+    try {
+        client.fetchZones()
+            .onSuccess { zones ->
+                zones.take(MAX_FENCES).forEach { zone ->
+                    lightContext.geofence.add(
+                        id = zone.entityId,
+                        latitude = zone.latitude,
+                        longitude = zone.longitude,
+                        radiusMeters = zone.radiusMeters,
+                        jobKey = LOCATION_JOB_KEY,
+                    )
+                }
+                Log.d("HomeTool", "registered ${zones.take(MAX_FENCES).size} zone geofences")
+            }
+            .onFailure { Log.w("HomeTool", "could not fetch zones: ${it.message}") }
+    } finally {
+        client.close()
+    }
+}
+
+private const val MAX_FENCES = 5
 
 fun cancelLocationReporting(lightContext: SealedLightContext) {
     LightWork.cancel(lightContext, LOCATION_JOB_KEY)

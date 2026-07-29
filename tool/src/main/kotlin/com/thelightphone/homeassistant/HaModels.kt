@@ -78,6 +78,14 @@ private val BRIGHTNESS_MODES = setOf(
     "brightness", "color_temp", "hs", "rgb", "rgbw", "rgbww", "white", "xy",
 )
 
+data class HaZone(
+    val entityId: String,
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val radiusMeters: Float,
+)
+
 /** One row on a rendered dashboard screen. */
 sealed class DashRow {
     data class Header(val text: String) : DashRow()

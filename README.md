@@ -4,16 +4,42 @@ I'm creating and testing a Home Assistant tool for the Light Phone III. It's ver
 
 Aim is to be able to control Home Assistant like you can with the companion app, but in LP style. Location tracking and notifications are also on the wishlist.
 
-## Status
+## What works
 
-What works today (tested against a real Home Assistant instance in the LightOS emulator):
+Tested on a Light Phone III against a live Home Assistant instance.
 
-- Add a server with name / URL / long-lived access token (QR scan supported) — https only
-- The HA dashboard with url path `light-phone` is the source of truth: its cards render as a native Light-style list, its views become screens
-- Control entities per domain: toggles, locks (lock/unlock), covers, scenes, scripts, buttons
-- `mobile_app` registration: the phone shows up as a device in HA, with a battery sensor and `notify.mobile_app_*` service ready for later phases
+**Connecting**
+- Add one or more servers (home, work) with a name, URL and long-lived access token
+- Scan the token straight from Home Assistant's own QR code, or scan a single QR carrying url + token + name
+- https only — Light's generated manifest doesn't allow cleartext, so a Nabu Casa or otherwise TLS-terminated URL is required
+- Registers itself with the `mobile_app` integration, so the phone shows up as a device in HA with a `notify.mobile_app_*` service and a battery sensor
 
-On the wishlist / blocked for now: live state updates over WebSocket, camera snapshots, notifications via UnifiedPush, and location + battery readings on-device (the Light sandbox doesn't expose an API for those yet).
+**Your dashboard is the configuration**
+- The app renders the HA dashboard with url path `light-phone`: what you put on it is what appears on the phone, in the order you arrange it
+- Every view becomes a screen; tap the title to switch, or use a button card with a navigate tap action
+- Understood cards: `entities`, `tile`, `entity`, `button`, `light`, `lock`, `thermostat`, `sensor`, `gauge`, `humidifier`, `glance`, `markdown`, `heading`, `map`, `camera`, `picture-entity`, `picture-glance`, and the stacking/section/grid containers. Anything else is skipped rather than breaking the screen.
+- Dashboard and last known states are cached, so the screen is filled the moment you open the tool
+
+**Controlling**
+- One tap: lights, switches, locks (lock/unlock), covers, scenes, scripts, buttons, automations
+- Detail screens with large − and + steppers for anything with more than on/off: dimmable lights, cover position, climate target temperature (including picking the HVAC mode and seeing what the unit is actually doing), fan speed, number helpers
+- Live updates over a WebSocket while the dashboard is open, so a light someone else switches changes on your screen too
+
+**Camera and map**
+- Camera entities open a near-fullscreen still, refreshed every couple of seconds
+- Map cards render OpenStreetMap tiles with lettered markers per tracked entity, zoomed to fit, listing zone and distance underneath
+
+**Reporting back to Home Assistant**
+- Battery level as a sensor, and location to your `device_tracker`, both opt-in per server (location defaults to off)
+- Cadence adapts instead of polling blindly: roughly every 5 minutes while the phone is moving, backing off to an hour once it has been still, never faster than 30 minutes below 20% battery unless charging
+- The accelerometer decides whether a GPS fix is worth taking at all — a phone on a desk reports where it was parked once, then leaves the receiver alone
+- Zone geofences (AOSP proximity alerts, no Google Play Services needed) report arrivals and departures as they happen
+
+## Not there yet
+
+- **Notifications**: LightOS can wake a tool over UnifiedPush, but doesn't yet show notifications from third-party tools ([discussion #111](https://github.com/orgs/lightphone/discussions/111) — Light says it's in progress)
+- **Local HTTP instances**: blocked by the generated manifest, see above
+- Battery, location, motion and geofencing rely on primitives added to `sdk/client` in the `private-build` branch, because the SDK doesn't expose them yet. The `home-assistant-tool` branch stays within the sandbox and does without.
 
 The app code lives in [`tool/src/main/kotlin/com/thelightphone/homeassistant/`](tool/src/main/kotlin/com/thelightphone/homeassistant/). See [PLAN.md](PLAN.md) for the full research, architecture and phase plan (in Dutch).
 
