@@ -55,12 +55,20 @@ class HaClient(private val server: ServerConfig) {
     suspend fun callService(
         call: HaActions.ServiceCall,
         entityId: String,
-        data: Map<String, Double> = emptyMap(),
+        data: Map<String, Any> = emptyMap(),
     ): Result<Unit> = runCatching {
         val body = buildJsonObject {
             put("entity_id", entityId)
             data.forEach { (key, value) ->
-                if (value == value.toInt().toDouble()) put(key, value.toInt()) else put(key, value)
+                when (value) {
+                    is String -> put(key, value)
+                    is Boolean -> put(key, value)
+                    is Int -> put(key, value)
+                    is Double ->
+                        if (value == value.toInt().toDouble()) put(key, value.toInt())
+                        else put(key, value)
+                    else -> put(key, value.toString())
+                }
             }
         }.toString()
         post("/api/services/${call.domain}/${call.service}", body)

@@ -53,6 +53,14 @@ data class HaState(
     fun number(key: String): Double? =
         (attributes[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
 
+    fun text(key: String): String? =
+        (attributes[key] as? JsonPrimitive)?.contentOrNull
+
+    fun textList(key: String): List<String> =
+        (attributes[key] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            .orEmpty()
+
     /** Brightness as a percentage; HA reports it 0-255. */
     val brightnessPercent: Int?
         get() = number("brightness")?.let { (it / 255.0 * 100).toInt() }

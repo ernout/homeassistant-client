@@ -72,7 +72,7 @@ class EntityDetailViewModel(
         }
     }
 
-    fun call(domain: String, service: String, data: Map<String, Double> = emptyMap()) {
+    fun call(domain: String, service: String, data: Map<String, Any> = emptyMap()) {
         val active = client ?: return
         busy.value = true
         viewModelScope.launch {
@@ -216,23 +216,60 @@ class EntityDetailScreen(
     private fun ClimateControls(state: HaState?) {
         val target = state?.number("temperature")
         val current = state?.number("current_temperature")
+        val mode = state?.state
+        // hvac_action is what the unit is doing right now (heating/idle);
+        // the state is the mode it has been set to.
+        val action = state?.text("hvac_action")
+
         BigValue(target?.let { formatTemperature(it) } ?: "—")
-        current?.let {
-            LightText(
-                text = "Now ${formatTemperature(it)}",
-                variant = LightTextVariant.Detail,
-                lighten = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        LightText(
+            text = buildString {
+                current?.let { append("Now ${formatTemperature(it)}") }
+                if (current != null && (mode != null || action != null)) append(" · ")
+                append(listOfNotNull(action ?: mode).joinToString().replaceFirstChar { it.uppercase() })
+            },
+            variant = LightTextVariant.Detail,
+            lighten = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
         Stepper(
             onDown = { viewModel.stepTemperature(-1.0) },
             onUp = { viewModel.stepTemperature(1.0) },
         )
-        ActionRow(
-            "Heat" to { viewModel.call("climate", "set_hvac_mode", emptyMap()) },
-            "Off" to { viewModel.call("climate", "turn_off") },
-        )
+
+        val modes = state?.textList("hvac_modes").orEmpty()
+        if (modes.isNotEmpty()) {
+            LightText(
+                text = "Mode",
+                variant = LightTextVariant.Detail,
+                lighten = true,
+                modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+            )
+            modes.forEach { available ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .lightClickable {
+                            viewModel.call(
+                                "climate",
+                                "set_hvac_mode",
+                                mapOf("hvac_mode" to available),
+                            )
+                        }
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LightText(
+                        text = available.replace('_', ' ').replaceFirstChar { it.uppercase() },
+                        variant = LightTextVariant.Copy,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (available == mode) {
+                        LightText(text = "\u00b7", variant = LightTextVariant.Copy)
+                    }
+                }
+            }
+        }
     }
 
     @Composable
