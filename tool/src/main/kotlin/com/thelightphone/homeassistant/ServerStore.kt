@@ -58,6 +58,29 @@ class ServerStore(private val dataStore: DataStore<Preferences>) {
         return next
     }
 
+    /**
+     * Caches the raw Lovelace config per server so the dashboard renders
+     * instantly on open; the network fetch then refreshes it in the background.
+     */
+    suspend fun cachedDashboard(serverId: String): String? =
+        dataStore.data.first()[dashboardKey(serverId)]
+
+    suspend fun cacheDashboard(serverId: String, rawConfig: String) {
+        dataStore.edit { it[dashboardKey(serverId)] = rawConfig }
+    }
+
+    /** Caches last known entity states, same idea as the dashboard cache. */
+    suspend fun cachedStates(serverId: String): String? =
+        dataStore.data.first()[statesKey(serverId)]
+
+    suspend fun cacheStates(serverId: String, rawStates: String) {
+        dataStore.edit { it[statesKey(serverId)] = rawStates }
+    }
+
+    private fun dashboardKey(serverId: String) = stringPreferencesKey("dashboard_$serverId")
+
+    private fun statesKey(serverId: String) = stringPreferencesKey("states_$serverId")
+
     /** Stable device id for mobile_app registrations, generated once. */
     suspend fun deviceId(): String {
         dataStore.data.first()[DEVICE_ID]?.let { return it }

@@ -37,10 +37,20 @@ class HaClient(private val server: ServerConfig) {
         Unit
     }
 
-    suspend fun fetchStates(): Result<Map<String, HaState>> = runCatching {
-        json.decodeFromString<List<HaState>>(get("/api/states"))
-            .associateBy { it.entity_id }
+    suspend fun fetchStates(): Result<Pair<Map<String, HaState>, String>> = runCatching {
+        val raw = get("/api/states")
+        json.decodeFromString<List<HaState>>(raw).associateBy { it.entity_id } to raw
     }
+
+    /** Parses a cached /api/states body; used to paint the UI before the network call. */
+    fun parseStates(raw: String): Map<String, HaState>? = runCatching {
+        json.decodeFromString<List<HaState>>(raw).associateBy { it.entity_id }
+    }.getOrNull()
+
+    /** Parses a cached Lovelace config body. */
+    fun parseDashboard(raw: String): List<DashView>? = runCatching {
+        LovelaceParser.parse(json.parseToJsonElement(raw).jsonObject)
+    }.getOrNull()
 
     suspend fun callService(call: HaActions.ServiceCall, entityId: String): Result<Unit> =
         runCatching {
@@ -170,7 +180,7 @@ class HaClient(private val server: ServerConfig) {
      * Fetches the Lovelace config of [ServerConfig.dashboard] over the WebSocket API
      * (the same `lovelace/config` command the HA frontend uses).
      */
-    suspend fun fetchDashboard(): Result<List<DashView>> = runCatching {
+    suspend fun fetchDashboard(): Result<Pair<List<DashView>, String>> = runCatching {
         val wsUrl = baseUrl
             .replaceFirst("https://", "wss://")
             .replaceFirst("http://", "ws://") + "/api/websocket"
@@ -226,7 +236,8 @@ class HaClient(private val server: ServerConfig) {
         }
 
         failure?.let { error(it) }
-        LovelaceParser.parse(config ?: error("No dashboard config received."))
+        val resolved = config ?: error("No dashboard config received.")
+        LovelaceParser.parse(resolved) to resolved.toString()
     }
 
     private suspend fun io.ktor.client.plugins.websocket.DefaultClientWebSocketSession.sendJson(

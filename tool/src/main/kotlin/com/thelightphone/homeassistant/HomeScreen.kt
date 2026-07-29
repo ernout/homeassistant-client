@@ -36,7 +36,11 @@ import androidx.datastore.preferences.core.Preferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
-class HomeViewModel(dataStore: DataStore<Preferences>) : LightViewModel<Unit>() {
+class HomeViewModel(
+    dataStore: DataStore<Preferences>,
+    private val battery: com.thelightphone.sdk.LightBattery,
+    private val location: com.thelightphone.sdk.LightLocation,
+) : LightViewModel<Unit>() {
 
     private val store = ServerStore(dataStore)
 
@@ -63,11 +67,16 @@ class HomeViewModel(dataStore: DataStore<Preferences>) : LightViewModel<Unit>() 
             server.value = selected
             if (selected == null) return@launch
             if (selected != clientConfig) {
+                val switchedServer = selected.id != clientConfig?.id
                 clientConfig = selected
                 client?.close()
                 client = HaClient(selected)
-                views.value = emptyList()
-                viewIndex.value = 0
+                if (switchedServer) {
+                    views.value = emptyList()
+                    viewIndex.value = 0
+                    states.value = emptyMap()
+                    loadFromCache(selected)
+                }
             }
             refresh()
         }
@@ -77,23 +86,45 @@ class HomeViewModel(dataStore: DataStore<Preferences>) : LightViewModel<Unit>() 
         if (client == null || loading.value) return
         loading.value = true
         error.value = null
+        // Device state (registration, battery, a GPS fix) must never hold up the
+        // dashboard: a cold GPS start can take many seconds.
         viewModelScope.launch {
             ensureRegistered()
-            syncBattery()
+            syncDeviceState()
+        }
+        viewModelScope.launch {
             val active = client ?: return@launch
+            val serverId = clientConfig?.id
             active.fetchStates()
-                .onSuccess { states.value = it }
+                .onSuccess { (parsed, raw) ->
+                    states.value = parsed
+                    serverId?.let { store.cacheStates(it, raw) }
+                }
                 .onFailure {
                     android.util.Log.e("HomeTool", "states failed", it)
                     error.value = it.message
                 }
             active.fetchDashboard()
-                .onSuccess { views.value = it }
+                .onSuccess { (parsed, raw) ->
+                    views.value = parsed
+                    serverId?.let { store.cacheDashboard(it, raw) }
+                }
                 .onFailure {
                     android.util.Log.e("HomeTool", "dashboard failed", it)
                     if (error.value == null) error.value = it.message
                 }
             loading.value = false
+        }
+    }
+
+    /** Paints the last known dashboard and states so the screen is never empty. */
+    private suspend fun loadFromCache(server: ServerConfig) {
+        val active = client ?: return
+        store.cachedDashboard(server.id)?.let { raw ->
+            active.parseDashboard(raw)?.let { views.value = it }
+        }
+        store.cachedStates(server.id)?.let { raw ->
+            active.parseStates(raw)?.let { states.value = it }
         }
     }
 
@@ -117,16 +148,32 @@ class HomeViewModel(dataStore: DataStore<Preferences>) : LightViewModel<Unit>() 
             .onFailure { android.util.Log.e("HomeTool", "mobile_app registration failed", it) }
     }
 
-    /** Registers/updates the battery sensor; clears the webhook on HTTP 410. */
-    private suspend fun syncBattery() {
+    /** Reports battery level and location to HA; clears the webhook on HTTP 410. */
+    private suspend fun syncDeviceState() {
         val cfg = clientConfig ?: return
         if (cfg.webhookId == null) return
         val active = client ?: return
-        val level = BatteryReader.levelPercent() ?: return
-        val result = active.registerBatterySensor(level)
-            .mapCatching { active.updateBatterySensor(level).getOrThrow() }
+        val level = battery.levelPercent()
+
+        val result = runCatching {
+            if (level != null) {
+                active.registerBatterySensor(level).getOrThrow()
+                active.updateBatterySensor(level).getOrThrow()
+            }
+            location.current().let { fix ->
+                if (fix != null) {
+                    active.updateLocation(
+                        latitude = fix.latitude,
+                        longitude = fix.longitude,
+                        accuracyMeters = fix.accuracyMeters,
+                        battery = level,
+                    ).getOrThrow()
+                }
+            }
+        }
+
         val failure = result.exceptionOrNull() ?: return
-        android.util.Log.e("HomeTool", "battery sync failed", failure)
+        android.util.Log.e("HomeTool", "device state sync failed", failure)
         if (failure is HaClient.WebhookGoneException) {
             val cleared = cfg.copy(webhookId = null, cloudhookUrl = null, remoteUiUrl = null)
             store.upsert(cleared)
@@ -156,7 +203,7 @@ class HomeViewModel(dataStore: DataStore<Preferences>) : LightViewModel<Unit>() 
             active.callService(action, entityId)
                 .onFailure { error.value = it.message }
             // Service calls return after the state change; refresh states only.
-            active.fetchStates().onSuccess { states.value = it }
+            active.fetchStates().onSuccess { (parsed, _) -> states.value = parsed }
         }
     }
 
@@ -173,7 +220,11 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
     override val viewModelClass: Class<HomeViewModel>
         get() = HomeViewModel::class.java
 
-    override fun createViewModel() = HomeViewModel(lightContext.dataStore)
+    override fun createViewModel() = HomeViewModel(
+        dataStore = lightContext.dataStore,
+        battery = lightContext.battery,
+        location = lightContext.location,
+    )
 
     @Composable
     override fun Content() {
