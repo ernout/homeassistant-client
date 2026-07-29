@@ -195,10 +195,20 @@ class EntityDetailScreen(
     @Composable
     private fun AlarmControls(state: HaState?) {
         val current = state?.state
-        BigValue(HaActions.stateLabel(state))
+        // Same small "Now …" line the climate screen uses, so the current mode
+        // reads as status rather than as one of the choices below.
+        LightText(
+            text = "Now · ${HaActions.stateLabel(state)}",
+            variant = LightTextVariant.Detail,
+            lighten = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp),
+        )
 
         val modes = AlarmModes.available(state?.number("supported_features")?.toInt() ?: 0)
         val entries = listOf("alarm_disarm" to "Disarm") + modes
+        SectionLabel("Set")
         entries.forEach { (service, label) ->
             val active = current == AlarmModes.stateFor(service)
             Row(
@@ -292,12 +302,7 @@ class EntityDetailScreen(
 
         val modes = state?.textList("hvac_modes").orEmpty()
         if (modes.isNotEmpty()) {
-            LightText(
-                text = "Mode",
-                variant = LightTextVariant.Detail,
-                lighten = true,
-                modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
-            )
+            SectionLabel("Set mode")
             modes.forEach { available ->
                 Row(
                     modifier = Modifier
@@ -351,6 +356,17 @@ class EntityDetailScreen(
         ActionRow("Toggle" to { viewModel.toggle() })
     }
 
+    /** Small lighten label, matching the section headers on the dashboard. */
+    @Composable
+    private fun SectionLabel(text: String, topPadding: androidx.compose.ui.unit.Dp = 20.dp) {
+        LightText(
+            text = text,
+            variant = LightTextVariant.Detail,
+            lighten = true,
+            modifier = Modifier.padding(top = topPadding, bottom = 2.dp),
+        )
+    }
+
     @Composable
     private fun BigValue(text: String) {
         LightText(
@@ -358,7 +374,7 @@ class EntityDetailScreen(
             variant = LightTextVariant.Heading,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 24.dp, bottom = 8.dp),
+                .padding(bottom = 8.dp),
         )
     }
 
