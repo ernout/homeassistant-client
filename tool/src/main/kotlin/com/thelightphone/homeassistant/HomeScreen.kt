@@ -262,6 +262,20 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         location = lightContext.location,
     )
 
+    override fun willShow() {
+        super.willShow()
+        // Keep the background reporting job in sync with the current toggles.
+        viewModel.viewModelScope.launch {
+            val reporting = ServerStore(lightContext.dataStore).servers()
+                .any { it.webhookId != null && (it.sendLocation || it.sendBattery) }
+            if (reporting) {
+                scheduleLocationReporting(lightContext)
+            } else {
+                cancelLocationReporting(lightContext)
+            }
+        }
+    }
+
     @Composable
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
@@ -387,6 +401,20 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
                     is DashRow.Entity -> EntityRow(row, states)
+                    is DashRow.Map -> Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .lightClickable { openMap(row.entityIds, row.title) }
+                            .padding(vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        LightText(
+                            text = row.title,
+                            variant = LightTextVariant.Copy,
+                            modifier = Modifier.weight(1f),
+                        )
+                        LightText(text = "▸", variant = LightTextVariant.Copy)
+                    }
                 }
             }
         }
@@ -396,13 +424,20 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
     private fun EntityRow(row: DashRow.Entity, states: Map<String, HaState>) {
         val state = states[row.entityId]
         val domain = row.entityId.substringBefore(".")
-        val actionable = HaActions.actionFor(domain, state?.state) != null
+        val isCamera = domain == "camera"
+        val actionable = isCamera || HaActions.actionFor(domain, state?.state) != null
         val label = row.nameOverride ?: state?.friendlyName ?: row.entityId
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .let { if (actionable) it.lightClickable { viewModel.tap(row.entityId) } else it }
+                .let {
+                    when {
+                        isCamera -> it.lightClickable { openCamera(row.entityId, label) }
+                        actionable -> it.lightClickable { viewModel.tap(row.entityId) }
+                        else -> it
+                    }
+                }
                 .padding(vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -412,7 +447,11 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 modifier = Modifier.weight(1f),
             )
             LightText(
-                text = if (HaActions.isRunAction(domain)) "▷" else HaActions.stateLabel(state),
+                text = when {
+                    isCamera -> "▸"
+                    HaActions.isRunAction(domain) -> "▷"
+                    else -> HaActions.stateLabel(state)
+                },
                 variant = LightTextVariant.Copy,
                 lighten = !actionable,
             )
@@ -424,6 +463,16 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             screenFactory = { SetupScreen(it, existing) },
             resultCallback = { saved -> if (saved == true) viewModel.reload() },
         )
+    }
+
+    private fun openCamera(entityId: String, label: String) {
+        val server = viewModel.server.value ?: return
+        navigateTo(screenFactory = { CameraScreen(it, server, entityId, label) })
+    }
+
+    private fun openMap(entityIds: List<String>, title: String) {
+        val server = viewModel.server.value ?: return
+        navigateTo(screenFactory = { MapScreen(it, server, entityIds, title) })
     }
 
     private fun openSettings() {

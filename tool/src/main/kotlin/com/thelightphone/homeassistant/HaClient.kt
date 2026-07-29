@@ -80,6 +80,26 @@ class HaClient(private val server: ServerConfig) {
         return text
     }
 
+    /** The instance's home coordinates from /api/config, used as the map origin. */
+    suspend fun fetchHomeCoordinates(): Result<Pair<Double, Double>> = runCatching {
+        val config = json.parseToJsonElement(get("/api/config")).jsonObject
+        val latitude = (config["latitude"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+        val longitude = (config["longitude"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+        if (latitude == null || longitude == null) error("Instance has no home coordinates.")
+        latitude to longitude
+    }
+
+    /** Fetches a still frame for a camera entity as JPEG bytes. */
+    suspend fun cameraSnapshot(entityId: String): Result<ByteArray> = runCatching {
+        withContext(Dispatchers.IO) {
+            http.newCall(request("/api/camera_proxy/$entityId").get().build()).execute().use {
+                if (it.code == 401) error("Invalid token (401).")
+                if (!it.isSuccessful) error("Camera: HTTP ${it.code}")
+                it.body?.bytes() ?: error("Empty snapshot.")
+            }
+        }
+    }
+
     /**
      * Registers this device with HA's mobile_app integration; creates a device
      * entry plus notify.mobile_app_* service and returns the webhook credentials.

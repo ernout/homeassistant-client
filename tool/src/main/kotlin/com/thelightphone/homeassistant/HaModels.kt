@@ -56,6 +56,9 @@ sealed class DashRow {
     data class Header(val text: String) : DashRow()
     data class Text(val text: String) : DashRow()
     data class Entity(val entityId: String, val nameOverride: String? = null) : DashRow()
+
+    /** A map card: opens a plotted view of the entities it tracks. */
+    data class Map(val entityIds: List<String>, val title: String) : DashRow()
 }
 
 data class DashView(
@@ -91,6 +94,22 @@ object LovelaceParser {
                             }
                         }
                     }
+                    "map" -> {
+                        val ids = (card["entities"] as? JsonArray).orEmpty().mapNotNull { ref ->
+                            when (ref) {
+                                is JsonPrimitive -> ref.content
+                                is JsonObject -> ref.str("entity")
+                                else -> null
+                            }
+                        }
+                        if (ids.isEmpty()) skipped++ else {
+                            rows += DashRow.Map(ids, card.str("title") ?: "Map")
+                        }
+                    }
+                    "camera", "picture-glance" ->
+                        (card.str("camera_image") ?: card.str("entity"))
+                            ?.let { rows += DashRow.Entity(it, card.str("name")) }
+                            ?: run { skipped++ }
                     "entity", "tile", "button", "light", "lock", "thermostat",
                     "picture-entity", "sensor", "gauge", "humidifier" ->
                         card.str("entity")?.let { rows += DashRow.Entity(it, card.str("name")) }
