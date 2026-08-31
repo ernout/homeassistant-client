@@ -37,7 +37,7 @@ Tested on a Light Phone III against a live Home Assistant instance.
 - Battery level as a sensor, and location to your `device_tracker`, both opt-in per server (location defaults to off)
 - Cadence adapts instead of polling blindly: roughly every 5 minutes while the phone is moving, backing off to an hour once it has been still, never faster than 30 minutes below 20% battery unless charging
 - The accelerometer decides whether a GPS fix is worth taking at all — a phone on a desk reports where it was parked once, then leaves the receiver alone
-- Zone geofences (AOSP proximity alerts, no Google Play Services needed) report arrivals as they happen, by zone name rather than coordinates — the one route that works indoors, where a fix can be minutes away. The home zone always gets a fence; the rest are the nearest few, re-picked as the phone travels
+- Zone geofences (AOSP proximity alerts, no Google Play Services needed) report arrivals as they happen, by zone name rather than coordinates — the one route that works indoors, where a fix can be minutes away. The home zone always gets a fence; up to twenty in total, nearest first, re-picked as the phone travels
 - A fence claim is only believed when a position confirms it: the platform evaluates new fences against whatever it has, and a kilometres-wide estimate otherwise reports arrival in every zone at once
 
 ## Not there yet

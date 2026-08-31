@@ -313,7 +313,7 @@ suspend fun refreshZoneGeofences(
     val client = HaClient(server)
     val store = ServerStore(lightContext.dataStore)
     try {
-        client.fetchZones()
+        client.fetchZonesRetrying()
             .onSuccess { zones ->
                 val here = from ?: lightContext.location.lastKnown()
                 val chosen = zones
@@ -332,10 +332,12 @@ suspend fun refreshZoneGeofences(
                     )
                     .take(MAX_FENCES)
 
-                // Drop whatever we fenced last time and no longer want, or a
-                // renamed zone keeps firing under a name HA will not recognise.
+                // Drop every zone we are not keeping, not just the ones we
+                // remember fencing: proximity alerts cannot be enumerated, so
+                // a set registered before this bookkeeping existed would other-
+                // wise poll forever with nothing left to recognise it.
                 val keeping = chosen.map { it.entityId }.toSet()
-                store.fencedZones().keys
+                zones.map { it.entityId }
                     .filterNot { it in keeping }
                     .forEach { lightContext.geofence.remove(it, LOCATION_JOB_KEY) }
 
@@ -368,6 +370,28 @@ suspend fun refreshZoneGeofences(
 }
 
 /**
+ * The instance's zones, with a couple of retries.
+ *
+ * The first request after the tool starts tends to die in the TLS handshake —
+ * the network is evidently not ready by the time the home screen appears —
+ * while everything after it succeeds. Refreshing fences is the one call with no
+ * second chance later in the session, and failing it silently leaves the phone
+ * fenced for wherever it used to be.
+ */
+private suspend fun HaClient.fetchZonesRetrying(): Result<List<HaZone>> {
+    var last: Result<List<HaZone>> = Result.failure(IllegalStateException("Not attempted."))
+    repeat(ZONE_FETCH_ATTEMPTS) { attempt ->
+        last = fetchZones()
+        if (last.isSuccess) return last
+        kotlinx.coroutines.delay(ZONE_FETCH_BACKOFF_MILLIS * (attempt + 1))
+    }
+    return last
+}
+
+private const val ZONE_FETCH_ATTEMPTS = 3
+private const val ZONE_FETCH_BACKOFF_MILLIS = 1_500L
+
+/**
  * What Home Assistant should show as the tracker's state on arrival. Its own
  * zone matcher answers with the literal string `home` for the home zone and
  * with the friendly name for every other one, so match that exactly —
@@ -378,7 +402,14 @@ private fun HaZone.reportedName(): String =
 
 private const val HOME_ZONE = "zone.home"
 
-private const val MAX_FENCES = 5
+/**
+ * Not a platform ceiling — AOSP hangs every alert off one provider request, so
+ * the marginal cost of another zone is close to nothing, and what actually
+ * drives polling is being near a boundary. Bounded anyway, because the set is
+ * re-registered as the phone travels and there is no point carrying zones from
+ * the other side of the country.
+ */
+private const val MAX_FENCES = 20
 
 /** How far the phone has to travel before the fence set is worth re-picking. */
 private const val FENCE_REFRESH_METERS = 2_000.0
