@@ -338,26 +338,43 @@ class HaClient(private val server: ServerConfig) {
         },
     )
 
-    /** Sends a location update; ready for when LightOS exposes a GPS primitive. */
+    /**
+     * Sends a location update: coordinates, a zone name, or both.
+     *
+     * HA's schema asks for at least one of the two, and a name is worth more
+     * than it looks — it sets the tracker's state directly instead of being
+     * matched against zones, so arriving somewhere can be reported without a
+     * position at all. That matters on a phone that cannot get a GPS fix
+     * indoors, which is exactly where arriving tends to end.
+     */
     suspend fun updateLocation(
-        latitude: Double,
-        longitude: Double,
-        accuracyMeters: Int,
-        battery: Int?,
-    ): Result<Unit> = webhook(
-        "update_location",
-        buildJsonObject {
-            put(
-                "gps",
-                kotlinx.serialization.json.buildJsonArray {
-                    add(JsonPrimitive(latitude))
-                    add(JsonPrimitive(longitude))
-                },
-            )
-            put("gps_accuracy", accuracyMeters)
-            battery?.let { put("battery", it) }
-        },
-    )
+        latitude: Double? = null,
+        longitude: Double? = null,
+        accuracyMeters: Int? = null,
+        battery: Int? = null,
+        locationName: String? = null,
+    ): Result<Unit> {
+        if (latitude == null && locationName == null) {
+            return Result.failure(IllegalArgumentException("Nothing to report."))
+        }
+        return webhook(
+            "update_location",
+            buildJsonObject {
+                if (latitude != null && longitude != null) {
+                    put(
+                        "gps",
+                        kotlinx.serialization.json.buildJsonArray {
+                            add(JsonPrimitive(latitude))
+                            add(JsonPrimitive(longitude))
+                        },
+                    )
+                    accuracyMeters?.let { put("gps_accuracy", it) }
+                }
+                locationName?.let { put("location_name", it) }
+                battery?.let { put("battery", it) }
+            },
+        )
+    }
 
     /**
      * Fetches the Lovelace config of [ServerConfig.dashboard] over the WebSocket API

@@ -152,6 +152,19 @@ data class AssistReply(
     val continueConversation: Boolean,
 )
 
+/**
+ * A zone we hold a proximity alert for: the name to report on arrival, plus the
+ * circle itself, so a crossing can be sanity-checked against a known position
+ * before it is passed on as fact.
+ */
+@Serializable
+data class FencedZone(
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val radiusMeters: Float,
+)
+
 data class HaZone(
     val entityId: String,
     val name: String,

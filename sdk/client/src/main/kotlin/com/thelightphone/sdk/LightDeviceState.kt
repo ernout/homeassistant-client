@@ -133,19 +133,29 @@ class LightLocation internal constructor(private val androidContext: Context) {
             androidContext.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
-    /** Best last-known position across providers, or null. */
+    /**
+     * Best last-known position across providers, or null.
+     *
+     * "Best" is the most accurate of the recent ones, not simply the newest.
+     * The network provider answers constantly and coarsely, so picking by
+     * timestamp alone hands back an estimate kilometres wide while a GPS fix
+     * good to ten metres, minutes older, sits right next to it.
+     */
     fun lastKnown(): Fix? {
         if (!hasPermission()) return null
         val manager = androidContext.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             ?: return null
         return runCatching {
-            manager.allProviders
+            val known = manager.allProviders
                 .mapNotNull { provider ->
                     @Suppress("MissingPermission")
                     manager.getLastKnownLocation(provider)
                 }
-                .maxByOrNull { it.time }
-                ?.toFix()
+                .map { it.toFix() }
+            known
+                .filter { it.ageMillis <= RECENT_ENOUGH_MILLIS }
+                .minByOrNull { it.accuracyMeters }
+                ?: known.maxByOrNull { -it.ageMillis }
         }.getOrNull()
     }
 
@@ -268,6 +278,9 @@ class LightLocation internal constructor(private val androidContext: Context) {
          * repeats what another app asked for, and on a Light Phone nothing else
          * asks.
          */
+        /** How far back a fix still counts when picking the best known one. */
+        const val RECENT_ENOUGH_MILLIS = 60 * 60 * 1000L
+
         val PROVIDERS = listOf(
             LocationManager.FUSED_PROVIDER,
             LocationManager.NETWORK_PROVIDER,

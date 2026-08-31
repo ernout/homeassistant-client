@@ -37,7 +37,8 @@ Tested on a Light Phone III against a live Home Assistant instance.
 - Battery level as a sensor, and location to your `device_tracker`, both opt-in per server (location defaults to off)
 - Cadence adapts instead of polling blindly: roughly every 5 minutes while the phone is moving, backing off to an hour once it has been still, never faster than 30 minutes below 20% battery unless charging
 - The accelerometer decides whether a GPS fix is worth taking at all — a phone on a desk reports where it was parked once, then leaves the receiver alone
-- Zone geofences (AOSP proximity alerts, no Google Play Services needed) report arrivals and departures as they happen
+- Zone geofences (AOSP proximity alerts, no Google Play Services needed) report arrivals as they happen, by zone name rather than coordinates — the one route that works indoors, where a fix can be minutes away. The home zone always gets a fence; the rest are the nearest few, re-picked as the phone travels
+- A fence claim is only believed when a position confirms it: the platform evaluates new fences against whatever it has, and a kilometres-wide estimate otherwise reports arrival in every zone at once
 
 ## Not there yet
 
@@ -45,7 +46,7 @@ Tested on a Light Phone III against a live Home Assistant instance.
 - **Local HTTP instances**: blocked by the generated manifest, see above
 - **Voice needs a manual permission grant**: LightOS refuses `RECORD_AUDIO` to tools (`adb shell pm grant com.thelightphone.homeassistant android.permission.RECORD_AUDIO` works around it)
 - **So does background location**: a foreground-only grant looks fine in Settings but Android rejects the location app op on every run that happens off-screen, so the phone keeps reporting wherever it stood when the tool was last open. Same workaround: `adb shell pm grant com.thelightphone.homeassistant android.permission.ACCESS_BACKGROUND_LOCATION`. Settings shows which of the two grants the tool actually holds.
-- **Indoors there is often no position worth sending**: GNSS on the LP3 reports a mean time-to-first-fix around 50 seconds and does not lock at all from a desk, and the network provider then answers with kilometres of uncertainty. Home Assistant feeds `gps_accuracy` straight to its zone matcher, so such a fix would place the phone in whichever zone is nearest — reporting nothing is the honest answer, and the tool drops anything less accurate than 500m.
+- **A fix takes its time, and indoors it sometimes never comes**: GNSS on the LP3 reports a mean time-to-first-fix around 50 seconds, and the network provider fills the gap with kilometres of uncertainty. Home Assistant feeds `gps_accuracy` straight to its zone matcher, so a vague fix would place the phone in whichever zone happens to be nearest — reporting nothing is the honest answer, and anything less accurate than 500m is dropped.
 - Battery, location, motion and geofencing rely on primitives added to `sdk/client` in the `private-build` branch, because the SDK doesn't expose them yet. The `home-assistant-tool` branch stays within the sandbox and does without.
 
 Things we ran into that need Light's side to change — bugs, missing primitives, open questions — are collected in [LIGHT-SDK-FEEDBACK.md](LIGHT-SDK-FEEDBACK.md).

@@ -141,6 +141,41 @@ class ServerStore(
 
     private fun reportingKey(name: String) = stringPreferencesKey("reporting_$name")
 
+    /**
+     * The zones we currently hold a fence for. Kept here so a crossing can be
+     * reported straight away, without asking the instance what the zone was
+     * called — and so the claim can be checked against a position before it is
+     * believed.
+     */
+    suspend fun fencedZones(): Map<String, FencedZone> {
+        val stored = dataStore.data.first()[FENCED_ZONES] ?: return emptyMap()
+        return runCatching { json.decodeFromString<Map<String, FencedZone>>(stored) }
+            .getOrDefault(emptyMap())
+    }
+
+    suspend fun saveFencedZones(zones: Map<String, FencedZone>, anchor: Pair<Double, Double>?) {
+        val encoded = json.encodeToString(zones)
+        dataStore.edit { prefs ->
+            prefs[FENCED_ZONES] = encoded
+            anchor?.let {
+                prefs[FENCE_ANCHOR] = "${it.first},${it.second}"
+            } ?: prefs.remove(FENCE_ANCHOR)
+        }
+    }
+
+    /**
+     * Where the phone was when the current fences were chosen. The zones worth
+     * fencing are the ones near you, so once you are a town away the set is the
+     * wrong one and needs picking again.
+     */
+    suspend fun fenceAnchor(): Pair<Double, Double>? {
+        val raw = dataStore.data.first()[FENCE_ANCHOR] ?: return null
+        val parts = raw.split(",")
+        val latitude = parts.getOrNull(0)?.toDoubleOrNull() ?: return null
+        val longitude = parts.getOrNull(1)?.toDoubleOrNull() ?: return null
+        return latitude to longitude
+    }
+
     /** Stable device id for mobile_app registrations, generated once. */
     suspend fun deviceId(): String {
         dataStore.data.first()[DEVICE_ID]?.let { return it }
@@ -153,5 +188,7 @@ class ServerStore(
         val SERVERS = stringPreferencesKey("servers_json")
         val SELECTED = stringPreferencesKey("selected_server_id")
         val DEVICE_ID = stringPreferencesKey("device_id")
+        val FENCED_ZONES = stringPreferencesKey("fenced_zones")
+        val FENCE_ANCHOR = stringPreferencesKey("fence_anchor")
     }
 }
