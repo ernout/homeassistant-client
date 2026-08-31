@@ -55,9 +55,23 @@ val reportLocationJob: LightJobHandler = { lightContext, input ->
         val needsFix = wantsLocation &&
             (moving || !tracking.reportedWhileStill || tracking.isStale())
 
+        if (wantsLocation && !lightContext.location.hasBackgroundPermission()) {
+            // Worth saying out loud: without it Android rejects the location
+            // app op on every run that happens off-screen, so HA silently keeps
+            // whatever position the tool last reported while it was open.
+            Log.w("HomeTool", "location job: no background location permission")
+        }
+
         val fix = if (needsFix) lightContext.location.current() else null
         val usableFix = fix?.takeIf {
             it.accuracyMeters <= MAX_ACCURACY_METERS && it.ageMillis <= MAX_FIX_AGE_MILLIS
+        }
+        if (fix != null && usableFix == null) {
+            Log.d(
+                "HomeTool",
+                "location job: discarded fix, ${fix.accuracyMeters}m accurate, " +
+                    "${fix.ageMillis / 1000}s old",
+            )
         }
 
         val movedFar = usableFix != null && tracking.movedFrom(usableFix) >= MIN_DISTANCE_METERS
@@ -156,8 +170,21 @@ private data class ReportingState(
 
 private const val EARTH_RADIUS_METERS = 6_371_000.0
 private const val MIN_DISTANCE_METERS = 100.0
-private const val MAX_ACCURACY_METERS = 200
-private const val MAX_FIX_AGE_MILLIS = 5 * 60 * 1000L
+
+/**
+ * Home Assistant hands `gps_accuracy` straight to its zone matcher, which
+ * counts a device as inside a zone when the fix could plausibly be there. A
+ * wildly imprecise fix would therefore park the phone in whichever zone is
+ * nearest — usually home — so cap what we are willing to send. 500m still lets
+ * a network-only fix through; it is worth more than no position at all.
+ */
+private const val MAX_ACCURACY_METERS = 500
+
+/**
+ * Long enough to accept a fix acquired earlier in the same wake-up, short
+ * enough that a days-old cached position never gets reported as current.
+ */
+private const val MAX_FIX_AGE_MILLIS = 10 * 60 * 1000L
 private const val HEARTBEAT_MILLIS = 60 * 60 * 1000L
 private const val MOVING_MINUTES = 5
 private const val MAX_MINUTES = 60

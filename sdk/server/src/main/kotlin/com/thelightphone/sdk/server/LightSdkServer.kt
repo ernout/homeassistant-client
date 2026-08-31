@@ -181,6 +181,9 @@ object LightSdkServer {
             Manifest.permission.CAMERA,
             Manifest.permission.READ_MEDIA_AUDIO,
             Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.ACCESS_BACKGROUND_LOCATION,
         ).contains(permissionName)
     }
 

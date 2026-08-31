@@ -5,14 +5,18 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
+import android.location.LocationRequest
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.BatteryManager
-import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -101,6 +105,12 @@ class LightMotion internal constructor(private val androidContext: Context) {
  * Same caveat as [LightBattery]: a preview of a primitive the SDK does not
  * offer yet. ACCESS_FINE_LOCATION/ACCESS_COARSE_LOCATION are already on the
  * permission allowlist, but there is no API to actually read a position.
+ *
+ * Note that a foreground-only grant buys nothing here: Android rejects the
+ * app op outright once the tool leaves the screen, so a periodic job needs
+ * ACCESS_BACKGROUND_LOCATION as well. [hasBackgroundPermission] says whether
+ * that is the case, so callers can explain the difference instead of silently
+ * reporting nothing.
  */
 class LightLocation internal constructor(private val androidContext: Context) {
 
@@ -116,6 +126,12 @@ class LightLocation internal constructor(private val androidContext: Context) {
             PackageManager.PERMISSION_GRANTED ||
             androidContext.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
+
+    /** True when location also works with no screen up — i.e. from a job. */
+    fun hasBackgroundPermission(): Boolean =
+        hasPermission() &&
+            androidContext.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
 
     /** Best last-known position across providers, or null. */
     fun lastKnown(): Fix? {
@@ -134,45 +150,98 @@ class LightLocation internal constructor(private val androidContext: Context) {
     }
 
     /**
-     * Requests a single fresh fix, falling back to [lastKnown] when no provider
-     * answers within [timeoutMillis]. Safe to call from a coroutine on any
-     * dispatcher; the callback is delivered on the main looper.
+     * Asks every enabled provider for a fresh fix at once and returns the most
+     * accurate answer, falling back to [lastKnown] when none of them delivers.
+     *
+     * Asking one provider at a time does not work in practice: GNSS on a Light
+     * Phone III reports a mean time-to-first-fix around 50 seconds, so a short
+     * wait on the GPS provider alone times out on nearly every run while the
+     * network and fused providers — which would have answered in a second —
+     * are never consulted. Hence the fan-out, an early exit as soon as a fix is
+     * accurate enough to be worth having, and a [timeoutMillis] generous enough
+     * to outlast a cold start.
      */
-    suspend fun current(timeoutMillis: Long = 15_000): Fix? {
+    suspend fun current(
+        timeoutMillis: Long = 90_000,
+        goodEnoughMeters: Int = 100,
+    ): Fix? {
         if (!hasPermission()) return null
         val manager = androidContext.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             ?: return null
-        val provider = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-            .firstOrNull { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
-            ?: return lastKnown()
+        val providers = PROVIDERS.filter {
+            runCatching { manager.isProviderEnabled(it) }.getOrDefault(false)
+        }
+        if (providers.isEmpty()) return lastKnown()
 
-        // A cold GPS start indoors may never produce a fix, so always bound the
-        // wait and fall back to the last known position.
-        return withTimeoutOrNull(timeoutMillis) { awaitFix(manager, provider) } ?: lastKnown()
+        var best: Fix? = null
+        coroutineScope {
+            // Unlimited, so a worker finishing after the timeout never blocks
+            // on a send nobody is going to receive.
+            val fixes = Channel<Fix?>(Channel.UNLIMITED)
+            val workers = providers.map { provider ->
+                launch { fixes.send(awaitFix(manager, provider, timeoutMillis)) }
+            }
+            withTimeoutOrNull(timeoutMillis) {
+                repeat(providers.size) {
+                    val fix = fixes.receive() ?: return@repeat
+                    if (best == null || fix.accuracyMeters < best!!.accuracyMeters) best = fix
+                    if (fix.accuracyMeters <= goodEnoughMeters) return@withTimeoutOrNull
+                }
+            }
+            workers.forEach { it.cancel() }
+        }
+        return best ?: lastKnown()
     }
 
-    private suspend fun awaitFix(manager: LocationManager, provider: String): Fix? =
+    /**
+     * One fix from one provider, or null once [durationMillis] has passed.
+     *
+     * Deliberately not `getCurrentLocation`, which would read better: AOSP
+     * caps that call at 30 seconds no matter what the request asks for, and
+     * this phone's mean time-to-first-fix is around 50, so GNSS is switched
+     * off again before it has ever locked on. Subscribing to updates and
+     * unsubscribing on the first one honours the duration we ask for.
+     */
+    private suspend fun awaitFix(
+        manager: LocationManager,
+        provider: String,
+        durationMillis: Long,
+    ): Fix? =
         suspendCancellableCoroutine { continuation ->
+            val startedAt = SystemClock.elapsedRealtime()
             val listener = object : android.location.LocationListener {
                 override fun onLocationChanged(location: Location) {
+                    val fix = location.toFix()
+                    Log.d(
+                        "LightLocation",
+                        "$provider: ${fix.accuracyMeters}m after " +
+                            "${SystemClock.elapsedRealtime() - startedAt}ms",
+                    )
                     runCatching { manager.removeUpdates(this) }
-                    if (continuation.isActive) continuation.resume(location.toFix())
+                    if (continuation.isActive) continuation.resume(fix)
                 }
 
-                @Deprecated("Required by the pre-API-30 interface")
-                override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
                 override fun onProviderDisabled(provider: String) {
                     runCatching { manager.removeUpdates(this) }
                     if (continuation.isActive) continuation.resume(null)
                 }
             }
-
+            val request = LocationRequest.Builder(0)
+                .setDurationMillis(durationMillis)
+                .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+                .setMaxUpdates(1)
+                .build()
             val requested = runCatching {
                 @Suppress("MissingPermission")
-                manager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+                manager.requestLocationUpdates(
+                    provider,
+                    request,
+                    androidContext.mainExecutor,
+                    listener,
+                )
                 true
             }.getOrElse {
-                Log.w("LightLocation", "requestSingleUpdate failed: ${it.message}")
+                Log.w("LightLocation", "requestLocationUpdates($provider) failed: ${it.message}")
                 false
             }
 
@@ -190,4 +259,19 @@ class LightLocation internal constructor(private val androidContext: Context) {
         accuracyMeters = accuracy.toInt(),
         ageMillis = System.currentTimeMillis() - time,
     )
+
+    private companion object {
+        /**
+         * Every provider worth asking; they are all asked at once. `fused` and
+         * `network` usually answer within a second but coarsely, `gps` is the
+         * slow and precise one. `passive` is deliberately absent: it only ever
+         * repeats what another app asked for, and on a Light Phone nothing else
+         * asks.
+         */
+        val PROVIDERS = listOf(
+            LocationManager.FUSED_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.GPS_PROVIDER,
+        )
+    }
 }

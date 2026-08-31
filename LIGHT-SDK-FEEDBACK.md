@@ -32,6 +32,18 @@ Tick items off as they are raised or resolved.
 - [ ] **A location primitive.**
   `ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` are on the permission allowlist, but `LocationManager` is unreachable for the same reason — the permission can be declared and nothing can use it. A one-shot fix plus something usable from a periodic `LightWork` job would be enough.
 
+- [ ] **`ACCESS_BACKGROUND_LOCATION` on the permission allowlist.**
+  Without it the two location permissions that *are* allowlisted are worth very little: Android grants them foreground-only, and rejects the app op on every run that happens while the tool is off-screen. A tool can therefore report a position only while the user is looking at it — which for a companion-style tool is precisely when it doesn't matter. On our phone this showed up as a `device_tracker` frozen at home while the battery sensor kept updating, and `appops` told the whole story:
+
+  ```
+  FINE_LOCATION (allow):
+    Access: [top-s]  ...   ← tool on screen
+    Reject: [bg-s]   ...   ← the periodic job
+    Reject: [cch-s]  ...   ← cached process
+  ```
+
+  The permission also needs to be grantable through the LightOS permission activity; `pm grant` over adb is the only route today.
+
 - [ ] **Bluetooth.**
   No Bluetooth permission is on the allowlist and there is no primitive. Detecting a car via a paired handsfree connection is a natural fit for a phone meant to be put away while driving.
 

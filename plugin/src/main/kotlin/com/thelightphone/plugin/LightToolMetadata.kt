@@ -155,6 +155,10 @@ object LightToolPolicy {
         "android.permission.READ_MEDIA_AUDIO",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
+        // Without this one a foreground grant is all a tool can ever have, and
+        // Android rejects the location app op the moment the tool leaves the
+        // screen — so no periodic job can report a position.
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.NFC",
     )
 

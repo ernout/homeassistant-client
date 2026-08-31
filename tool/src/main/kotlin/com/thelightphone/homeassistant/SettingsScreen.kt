@@ -1,5 +1,6 @@
 package com.thelightphone.homeassistant
 
+import android.Manifest
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,10 +16,12 @@ import androidx.compose.ui.unit.dp
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.viewModelScope
+import com.thelightphone.sdk.LightLocation
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
+import com.thelightphone.sdk.rememberPermissionRequestLauncher
 import com.thelightphone.sdk.ui.LightBarButton
 import com.thelightphone.sdk.ui.LightIcon
 import com.thelightphone.sdk.ui.LightIcons
@@ -34,12 +37,19 @@ import com.thelightphone.sdk.ui.lightClickable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
-class SettingsViewModel(dataStore: DataStore<Preferences>) : LightViewModel<Boolean>() {
+/** How much location the tool is actually allowed to read. */
+enum class LocationAccess { NONE, WHILE_OPEN, ALWAYS }
+
+class SettingsViewModel(
+    dataStore: DataStore<Preferences>,
+    private val location: LightLocation,
+) : LightViewModel<Boolean>() {
 
     private val store = ServerStore(dataStore)
 
     val servers = MutableStateFlow<List<ServerConfig>>(emptyList())
     val selectedId = MutableStateFlow<String?>(null)
+    val locationAccess = MutableStateFlow(LocationAccess.NONE)
     var changed = false
         private set
 
@@ -52,6 +62,19 @@ class SettingsViewModel(dataStore: DataStore<Preferences>) : LightViewModel<Bool
         viewModelScope.launch {
             servers.value = store.servers()
             selectedId.value = store.selected()?.id
+            refreshLocationAccess()
+        }
+    }
+
+    /**
+     * Reads the grant straight from the package manager rather than over the
+     * permission RPC, which LightOS can refuse to answer for a tool.
+     */
+    fun refreshLocationAccess() {
+        locationAccess.value = when {
+            location.hasBackgroundPermission() -> LocationAccess.ALWAYS
+            location.hasPermission() -> LocationAccess.WHILE_OPEN
+            else -> LocationAccess.NONE
         }
     }
 
@@ -94,13 +117,20 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
     override val viewModelClass: Class<SettingsViewModel>
         get() = SettingsViewModel::class.java
 
-    override fun createViewModel() = SettingsViewModel(lightContext.dataStore)
+    override fun createViewModel() =
+        SettingsViewModel(lightContext.dataStore, lightContext.location)
 
     @Composable
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val servers by viewModel.servers.collectAsState()
         val selectedId by viewModel.selectedId.collectAsState()
+        val locationAccess by viewModel.locationAccess.collectAsState()
+        // Android insists on the foreground grant first, and only then accepts
+        // a request for the background one.
+        val whileOpen = rememberPermissionRequestLauncher(Manifest.permission.ACCESS_FINE_LOCATION)
+        val always =
+            rememberPermissionRequestLauncher(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
 
         LightTheme(colors = themeColors) {
             Column(
@@ -137,6 +167,20 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
                             enabled = server.sendBattery,
                             onClick = { viewModel.toggleBattery(server) },
                         )
+                        if (server.sendLocation) {
+                            LocationAccessRow(
+                                access = locationAccess,
+                                onRequest = {
+                                    val launcher = when (locationAccess) {
+                                        LocationAccess.NONE -> whileOpen
+                                        LocationAccess.WHILE_OPEN -> always
+                                        LocationAccess.ALWAYS -> null
+                                    }
+                                    runCatching { launcher?.launch() }
+                                    viewModel.refreshLocationAccess()
+                                },
+                            )
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -172,6 +216,32 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
                 }
             }
         }
+    }
+
+    /**
+     * Says which of the two location grants the tool holds. Worth its own row:
+     * with only the foreground one, reporting looks enabled and quietly stops
+     * the moment the tool leaves the screen.
+     */
+    @Composable
+    private fun LocationAccessRow(access: LocationAccess, onRequest: () -> Unit) {
+        val label = when (access) {
+            LocationAccess.ALWAYS -> "Location allowed at all times"
+            LocationAccess.WHILE_OPEN -> "Location only while Home is open — tap to allow always"
+            LocationAccess.NONE -> "Location not allowed — tap to allow"
+        }
+        LightText(
+            text = label,
+            variant = LightTextVariant.Copy,
+            lighten = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .lightClickable(
+                    enabled = access != LocationAccess.ALWAYS,
+                    onClick = onRequest,
+                )
+                .padding(bottom = 8.dp),
+        )
     }
 
     @Composable
