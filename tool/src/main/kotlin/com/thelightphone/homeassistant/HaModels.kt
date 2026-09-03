@@ -173,6 +173,26 @@ data class HaZone(
     val radiusMeters: Float,
 )
 
+/** One recorded state of an entity, as the history API hands it back. */
+data class HistoryPoint(val atMillis: Long, val state: String) {
+    /** Null for anything that is not a reading — "on", "unavailable", a name. */
+    val value: Double? get() = state.toDoubleOrNull()
+}
+
+/**
+ * One logbook line: what happened, and what Home Assistant recorded as having
+ * set it off. The cause comes from the context it attaches to every state
+ * change, which is the same material its own Activity view reasons over.
+ */
+data class LogbookEntry(
+    val atMillis: Long,
+    val message: String?,
+    val state: String?,
+    val name: String?,
+    val triggeredBy: String?,
+    val triggeredByEntityId: String?,
+)
+
 /** One row on a rendered dashboard screen. */
 sealed class DashRow {
     data class Header(val text: String) : DashRow()
@@ -184,6 +204,22 @@ sealed class DashRow {
 
     /** A button card with a navigate tap action: jumps to another view. */
     data class Navigate(val path: String, val title: String) : DashRow()
+
+    /** A card that plots history instead of a current value. */
+    data class Chart(
+        val entityIds: List<String>,
+        val title: String,
+        val style: ChartStyle,
+        val hours: Int,
+    ) : DashRow()
+
+    /** A value row with its recent history drawn alongside it. */
+    data class EntityGraph(
+        val entityId: String,
+        val nameOverride: String? = null,
+        val style: ChartStyle,
+        val hours: Int,
+    ) : DashRow()
 }
 
 data class DashView(
@@ -221,13 +257,7 @@ object LovelaceParser {
                         }
                     }
                     "map" -> {
-                        val ids = (card["entities"] as? JsonArray).orEmpty().mapNotNull { ref ->
-                            when (ref) {
-                                is JsonPrimitive -> ref.content
-                                is JsonObject -> ref.str("entity")
-                                else -> null
-                            }
-                        }
+                        val ids = card.entityList()
                         if (ids.isEmpty()) skipped++ else {
                             rows += DashRow.Map(ids, card.str("title") ?: "Map")
                         }
@@ -236,8 +266,50 @@ object LovelaceParser {
                         (card.str("camera_image") ?: card.str("entity"))
                             ?.let { rows += DashRow.Entity(it, card.str("name")) }
                             ?: run { skipped++ }
+                    "history-graph" -> {
+                        val ids = card.entityList()
+                        if (ids.isEmpty()) skipped++ else rows += DashRow.Chart(
+                            entityIds = ids,
+                            title = card.str("title") ?: "History",
+                            style = ChartStyle.LINE,
+                            hours = card.int("hours_to_show") ?: DEFAULT_HISTORY_HOURS,
+                        )
+                    }
+                    "statistics-graph" -> {
+                        val ids = card.entityList()
+                        if (ids.isEmpty()) skipped++ else rows += DashRow.Chart(
+                            entityIds = ids,
+                            title = card.str("title") ?: "Statistics",
+                            // Statistics are quantities per period, and HA lets
+                            // the card say so; a bar chart drawn as a line
+                            // invites reading between points that mean nothing.
+                            style = if (card.str("chart_type") == "bar") {
+                                ChartStyle.BAR
+                            } else {
+                                ChartStyle.LINE
+                            },
+                            hours = (card.int("days_to_show") ?: DEFAULT_STATISTICS_DAYS) * 24,
+                        )
+                    }
+                    // The sensor card is the one HA draws a mini graph on, and
+                    // mini-graph-card is what most people reach for instead.
+                    "sensor", "mini-graph-card" -> {
+                        val entity = card.str("entity") ?: card.entityList().firstOrNull()
+                        val wantsGraph = card.str("type")?.removePrefix("custom:") ==
+                            "mini-graph-card" || card.str("graph") == "line"
+                        when {
+                            entity == null -> skipped++
+                            wantsGraph -> rows += DashRow.EntityGraph(
+                                entityId = entity,
+                                nameOverride = card.str("name"),
+                                style = ChartStyle.LINE,
+                                hours = card.int("hours_to_show") ?: DEFAULT_HISTORY_HOURS,
+                            )
+                            else -> rows += DashRow.Entity(entity, card.str("name"))
+                        }
+                    }
                     "entity", "tile", "button", "light", "lock", "thermostat",
-                    "picture-entity", "sensor", "gauge", "humidifier" -> {
+                    "picture-entity", "gauge", "humidifier" -> {
                         val navigatePath = (card["tap_action"] as? JsonObject)
                             ?.takeIf { it.str("action") == "navigate" }
                             ?.str("navigation_path")
@@ -277,6 +349,22 @@ object LovelaceParser {
             )
         }
     }
+
+    private fun JsonObject.int(key: String): Int? =
+        (this[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toInt()
+
+    /** The `entities:` list of a card, in either of the shapes HA allows. */
+    private fun JsonObject.entityList(): List<String> =
+        (this["entities"] as? JsonArray).orEmpty().mapNotNull { ref ->
+            when (ref) {
+                is JsonPrimitive -> ref.content
+                is JsonObject -> ref.str("entity")
+                else -> null
+            }
+        }
+
+    private const val DEFAULT_HISTORY_HOURS = 24
+    private const val DEFAULT_STATISTICS_DAYS = 30
 
     private fun JsonObject.str(key: String): String? =
         (this[key] as? JsonPrimitive)?.contentOrNull

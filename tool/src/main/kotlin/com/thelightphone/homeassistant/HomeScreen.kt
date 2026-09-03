@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -35,6 +37,8 @@ import com.thelightphone.sdk.ui.lightClickable
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.launch
 
 class HomeViewModel(
@@ -54,6 +58,10 @@ class HomeViewModel(
     val loading = MutableStateFlow(false)
 
     val live = MutableStateFlow(false)
+
+    /** Recorded history per entity, for whichever rows plot it. */
+    val histories = MutableStateFlow<Map<String, ChartSeries>>(emptyMap())
+    private var historyJob: kotlinx.coroutines.Job? = null
 
     /** Entity waiting for a confirming second tap, if any. */
     val pendingConfirm = MutableStateFlow<String?>(null)
@@ -236,6 +244,50 @@ class HomeViewModel(
     }
 
     /** Follows a navigate tap action, e.g. "/light-phone/upstairs" or "upstairs". */
+    /**
+     * Fetches the history the visible view's charts need, and only that.
+     *
+     * A dashboard can carry a lot of them, and each is its own request against
+     * the recorder, so this follows the eye: whatever view is open, nothing
+     * else. Already-loaded series are left alone — flicking between views is
+     * meant to be cheap.
+     */
+    fun loadHistories() {
+        val active = client ?: return
+        val view = views.value.getOrNull(viewIndex.value) ?: return
+        val wanted = view.rows
+            .flatMap { row ->
+                when (row) {
+                    is DashRow.Chart -> row.entityIds.map { it to row.hours }
+                    is DashRow.EntityGraph -> listOf(row.entityId to row.hours)
+                    else -> emptyList()
+                }
+            }
+            .distinctBy { it.first }
+            .filterNot { (entityId, _) -> histories.value.containsKey(entityId) }
+        if (wanted.isEmpty()) return
+
+        historyJob?.cancel()
+        historyJob = viewModelScope.launch {
+            wanted.forEach { (entityId, hours) ->
+                val since = System.currentTimeMillis() - hours * 60L * 60L * 1000L
+                active.fetchHistory(entityId, since)
+                    .onSuccess { points ->
+                        val unit = states.value[entityId]
+                            ?.attributes?.get("unit_of_measurement")
+                            ?.let { (it as? JsonPrimitive)?.contentOrNull }
+                        // Publish per entity, so the first chart appears while
+                        // the rest are still coming in.
+                        histories.value = histories.value +
+                            (entityId to ChartSeries.from(points, unit))
+                    }
+                    .onFailure {
+                        android.util.Log.w("HomeTool", "history for $entityId: ${it.message}")
+                    }
+            }
+        }
+    }
+
     fun openViewByPath(path: String) {
         val wanted = path.trimEnd('/').substringAfterLast('/')
         val index = views.value.indexOfFirst { it.path == wanted }
@@ -354,6 +406,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         val loading by viewModel.loading.collectAsState()
         val live by viewModel.live.collectAsState()
         val pendingConfirm by viewModel.pendingConfirm.collectAsState()
+        val histories by viewModel.histories.collectAsState()
 
         LightTheme(colors = themeColors) {
             Column(
@@ -366,6 +419,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                     false -> EmptyState()
                     true -> Dashboard(
                         server, views, viewIndex, states, error, loading, live, pendingConfirm,
+                        histories,
                     )
                 }
             }
@@ -406,8 +460,11 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         loading: Boolean,
         live: Boolean,
         pendingConfirm: String?,
+        histories: Map<String, ChartSeries>,
     ) {
         val view = views.getOrNull(viewIndex)
+        // Charts belong to a view, so the fetch follows whichever is open.
+        LaunchedEffect(viewIndex, views) { viewModel.loadHistories() }
         val centerText = buildString {
             append(server?.name ?: "Home")
             if (views.size > 1 && view != null) append(" · ${view.title}")
@@ -475,6 +532,8 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
                     is DashRow.Entity -> EntityRow(row, states, pendingConfirm)
+                    is DashRow.Chart -> ChartCard(row, states, histories)
+                    is DashRow.EntityGraph -> EntityGraphRow(row, states, histories)
                     is DashRow.Map -> LinkRow(row.title) { openMap(row.entityIds, row.title) }
                     is DashRow.Navigate -> LinkRow(row.title) { viewModel.openViewByPath(row.path) }
                 }
@@ -504,6 +563,79 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 modifier = Modifier.weight(1f),
             )
             LightText(text = "▸", variant = LightTextVariant.Copy)
+        }
+    }
+
+    /** A history-graph or statistics-graph card: a title and one plot per entity. */
+    @Composable
+    private fun ChartCard(
+        row: DashRow.Chart,
+        states: Map<String, HaState>,
+        histories: Map<String, ChartSeries>,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp)) {
+            LightText(text = row.title, variant = LightTextVariant.Heading)
+            row.entityIds.forEach { entityId ->
+                // With one entity the card title already says what this is.
+                if (row.entityIds.size > 1) {
+                    LightText(
+                        text = states[entityId]?.friendlyName ?: entityId,
+                        variant = LightTextVariant.Detail,
+                        lighten = true,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                }
+                when (val series = histories[entityId]) {
+                    null -> LightText(
+                        text = "Loading history…",
+                        variant = LightTextVariant.Detail,
+                        lighten = true,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                    else -> HistoryChart(
+                        series = series,
+                        style = row.style,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    /** A sensor card with a graph: the value, with its recent shape beside it. */
+    @Composable
+    private fun EntityGraphRow(
+        row: DashRow.EntityGraph,
+        states: Map<String, HaState>,
+        histories: Map<String, ChartSeries>,
+    ) {
+        val state = states[row.entityId]
+        val label = row.nameOverride ?: state?.friendlyName ?: row.entityId
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .lightClickable { openDetail(row.entityId, label) }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LightText(
+                text = label,
+                variant = LightTextVariant.Copy,
+                modifier = Modifier.weight(1f),
+            )
+            histories[row.entityId]?.let { series ->
+                Sparkline(
+                    series = series,
+                    style = row.style,
+                    modifier = Modifier
+                        .width(SPARKLINE_WIDTH)
+                        .padding(horizontal = 10.dp),
+                )
+            }
+            LightText(
+                text = HaActions.stateLabel(state),
+                variant = LightTextVariant.Copy,
+            )
         }
     }
 
@@ -551,6 +683,8 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             )
         }
     }
+
+    private val SPARKLINE_WIDTH = 84.dp
 
     private fun openSetup(existing: ServerConfig? = null) {
         navigateTo(

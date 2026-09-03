@@ -10,6 +10,7 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -74,6 +75,82 @@ class HaClient(private val server: ServerConfig) {
         post("/api/services/${call.domain}/${call.service}", body)
         Unit
     }
+
+    /**
+     * An entity's recorded history over a window, oldest first.
+     *
+     * `minimal_response` and `no_attributes` cut the payload down to state plus
+     * timestamp, which is all a chart needs and a great deal less to pull over
+     * a phone connection. HA only honours the former for a single entity, which
+     * suits us: charts are drawn one entity at a time.
+     */
+    suspend fun fetchHistory(
+        entityId: String,
+        sinceMillis: Long,
+        untilMillis: Long = System.currentTimeMillis(),
+    ): Result<List<HistoryPoint>> = runCatching {
+        val since = java.time.Instant.ofEpochMilli(sinceMillis)
+        val until = java.time.Instant.ofEpochMilli(untilMillis)
+        val raw = get(
+            "/api/history/period/$since" +
+                "?filter_entity_id=$entityId" +
+                "&end_time=$until" +
+                "&minimal_response&no_attributes",
+        )
+        val series = json.parseToJsonElement(raw) as? JsonArray ?: return@runCatching emptyList()
+        val entries = series.firstOrNull() as? JsonArray ?: return@runCatching emptyList()
+        entries.mapNotNull { entry ->
+            val row = entry as? JsonObject ?: return@mapNotNull null
+            val state = row.str("state") ?: return@mapNotNull null
+            // Later entries carry last_changed only; the first carries both.
+            val stamp = row.str("last_changed") ?: row.str("last_updated")
+            ?: return@mapNotNull null
+            val at = runCatching {
+                java.time.OffsetDateTime.parse(stamp).toInstant().toEpochMilli()
+            }.getOrNull() ?: return@mapNotNull null
+            HistoryPoint(atMillis = at, state = state)
+        }.sortedBy { it.atMillis }
+    }
+
+    /**
+     * Logbook entries for one entity: what changed, when, and — via the context
+     * Home Assistant records alongside every state change — what set it off.
+     */
+    suspend fun fetchLogbook(
+        entityId: String,
+        sinceMillis: Long,
+        untilMillis: Long = System.currentTimeMillis(),
+    ): Result<List<LogbookEntry>> = runCatching {
+        val since = java.time.Instant.ofEpochMilli(sinceMillis)
+        val until = java.time.Instant.ofEpochMilli(untilMillis)
+        val raw = get("/api/logbook/$since?entity=$entityId&end_time=$until")
+        val entries = json.parseToJsonElement(raw) as? JsonArray ?: return@runCatching emptyList()
+        entries.mapNotNull { entry ->
+            val row = entry as? JsonObject ?: return@mapNotNull null
+            val stamp = row.str("when") ?: return@mapNotNull null
+            val at = runCatching {
+                java.time.OffsetDateTime.parse(stamp).toInstant().toEpochMilli()
+            }.getOrNull()
+                ?: runCatching {
+                    // Some versions hand back epoch seconds as a number.
+                    (stamp.toDouble() * 1000).toLong()
+                }.getOrNull()
+                ?: return@mapNotNull null
+            LogbookEntry(
+                atMillis = at,
+                message = row.str("message"),
+                state = row.str("state"),
+                name = row.str("name"),
+                triggeredBy = row.str("context_name")
+                    ?: row.str("context_entity_id_name")
+                    ?: row.str("context_entity_id"),
+                triggeredByEntityId = row.str("context_entity_id"),
+            )
+        }.sortedByDescending { it.atMillis }
+    }
+
+    private fun JsonObject.str(key: String): String? =
+        (this[key] as? JsonPrimitive)?.contentOrNull
 
     private suspend fun get(path: String): String = withContext(Dispatchers.IO) {
         http.newCall(request(path).get().build()).execute().use { it.checkAndRead() }
