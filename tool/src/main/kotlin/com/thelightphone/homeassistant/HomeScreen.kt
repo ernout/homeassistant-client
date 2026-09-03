@@ -1,12 +1,17 @@
 package com.thelightphone.homeassistant
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
@@ -15,6 +20,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import com.thelightphone.sdk.InitialScreen
@@ -517,6 +523,9 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 .weight(1f)
                 .padding(horizontal = 1f.gridUnitsAsDp()),
         ) {
+            if (view.badges.isNotEmpty()) {
+                item { BadgeStrip(view.badges, states) }
+            }
             items(view.rows) { row ->
                 when (row) {
                     is DashRow.Header -> LightText(
@@ -563,6 +572,56 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                 modifier = Modifier.weight(1f),
             )
             LightText(text = "▸", variant = LightTextVariant.Copy)
+        }
+    }
+
+    /**
+     * The badges a dashboard view carries, which are already the user's own
+     * answer to what deserves noticing first — no second list to keep.
+     *
+     * Every badge is the same box; only the ink changes. Giving the quiet ones
+     * an outline too is what puts all three on one baseline, and it means the
+     * eye compares weight rather than shape. The filled one keeps a border in
+     * its own fill colour, or its text would sit a hair off the others.
+     */
+    @Composable
+    private fun BadgeStrip(badges: List<DashBadge>, states: Map<String, HaState>) {
+        FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            badges.forEach { badge -> Badge(badge, states[badge.entityId]) }
+        }
+    }
+
+    @Composable
+    private fun Badge(badge: DashBadge, state: HaState?) {
+        val colors = LightThemeTokens.colors
+        val edge = when (badge.urgency) {
+            BadgeUrgency.CALM -> colors.contentSecondary
+            BadgeUrgency.ATTENTION, BadgeUrgency.URGENT -> colors.content
+        }
+        val fill = if (badge.urgency == BadgeUrgency.URGENT) colors.content else Color.Transparent
+        val ink = if (badge.urgency == BadgeUrgency.URGENT) colors.background else edge
+
+        val name = badge.nameOverride ?: state?.friendlyName ?: badge.entityId
+        val reading = HaActions.stateLabel(state)
+        val label = buildString {
+            if (badge.urgency == BadgeUrgency.URGENT) append("! ")
+            if (badge.showName) append("$name ")
+            append(reading)
+        }
+
+        val shape = RoundedCornerShape(4.dp)
+        Box(
+            modifier = Modifier
+                .background(fill, shape)
+                .border(1.5.dp, edge, shape)
+                .lightClickable { openDetail(badge.entityId, name) }
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+        ) {
+            LightText(text = label, variant = LightTextVariant.Detail, color = ink)
         }
     }
 

@@ -193,6 +193,24 @@ data class LogbookEntry(
     val triggeredByEntityId: String?,
 )
 
+/**
+ * How loudly a badge should read.
+ *
+ * A colour wheel does not survive the trip to a two-ink screen, so the only
+ * question worth asking of a badge's colour is how much it wants noticing.
+ * Three steps is the most this display can hold apart: a fourth would have to
+ * borrow one of the others' treatments and stop meaning anything.
+ */
+enum class BadgeUrgency { CALM, ATTENTION, URGENT }
+
+/** A badge from the top of a dashboard view. */
+data class DashBadge(
+    val entityId: String,
+    val nameOverride: String? = null,
+    val urgency: BadgeUrgency = BadgeUrgency.CALM,
+    val showName: Boolean = true,
+)
+
 /** One row on a rendered dashboard screen. */
 sealed class DashRow {
     data class Header(val text: String) : DashRow()
@@ -227,6 +245,7 @@ data class DashView(
     val rows: List<DashRow>,
     val skippedCards: Int,
     val path: String? = null,
+    val badges: List<DashBadge> = emptyList(),
 )
 
 /**
@@ -344,10 +363,43 @@ object LovelaceParser {
             DashView(
                 title = view.str("title") ?: view.str("path") ?: "View ${index + 1}",
                 rows = rows,
+                badges = view.badges(),
                 skippedCards = skipped,
                 path = view.str("path"),
             )
         }
+    }
+
+    /**
+     * The view's badges, in either shape HA has used: a bare list of entity ids,
+     * or the card-like objects it moved to in 2024.8.
+     */
+    private fun JsonObject.badges(): List<DashBadge> =
+        (this["badges"] as? JsonArray).orEmpty().mapNotNull { ref ->
+            when (ref) {
+                is JsonPrimitive -> DashBadge(entityId = ref.content)
+                is JsonObject -> ref.str("entity")?.let { entityId ->
+                    DashBadge(
+                        entityId = entityId,
+                        nameOverride = ref.str("name"),
+                        urgency = urgencyOf(ref.str("color")),
+                        showName = ref.str("show_name") != "false",
+                    )
+                }
+                else -> null
+            }
+        }
+
+    /**
+     * Reads a badge's colour as a rank rather than a hue. Anything a person
+     * would have reached for to mean "look at this now" inverts; the warm
+     * colours short of that get a stronger outline; the rest stay quiet — which
+     * includes every badge whose colour was never set, and that is most of them.
+     */
+    private fun urgencyOf(color: String?): BadgeUrgency = when (color?.lowercase()) {
+        "red", "deep-orange" -> BadgeUrgency.URGENT
+        "orange", "amber", "yellow" -> BadgeUrgency.ATTENTION
+        else -> BadgeUrgency.CALM
     }
 
     private fun JsonObject.int(key: String): Int? =
