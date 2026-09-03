@@ -618,7 +618,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             modifier = Modifier
                 .background(fill, shape)
                 .border(1.5.dp, edge, shape)
-                .lightClickable { openDetail(badge.entityId, name) }
+                .lightClickable { openEntity(badge.entityId, name, state) }
                 .padding(horizontal = 9.dp, vertical = 5.dp),
         ) {
             LightText(text = label, variant = LightTextVariant.Detail, color = ink)
@@ -673,7 +673,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .lightClickable { openDetail(row.entityId, label) }
+                .lightClickable { openEntity(row.entityId, label, state) }
                 .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -719,7 +719,9 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                         isCamera -> it.lightClickable { openCamera(row.entityId, label) }
                         hasDetail -> it.lightClickable { openDetail(row.entityId, label) }
                         actionable -> it.lightClickable { onEntityTap(row.entityId, label) }
-                        else -> it
+                        // Nothing to call on a sensor, so the tap was going
+                        // spare; its history is the only thing anyone wants.
+                        else -> it.lightClickable { openHistory(row.entityId, label) }
                     }
                 }
                 .padding(vertical = 14.dp),
@@ -778,6 +780,24 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
         domain == "alarm_control_panel" && state == "disarmed" -> "Arm away?"
         domain == "alarm_control_panel" -> "Disarm?"
         else -> "Confirm?"
+    }
+
+    /**
+     * Opens whichever screen this entity actually has. A thermostat has
+     * controls; a thermometer has only its past, and sending that to a screen
+     * of buttons it does not support was the wrong door.
+     */
+    private fun openEntity(entityId: String, label: String, state: HaState?) {
+        when {
+            entityId.substringBefore(".") == "camera" -> openCamera(entityId, label)
+            HaActions.hasDetailScreen(state) -> openDetail(entityId, label)
+            else -> openHistory(entityId, label)
+        }
+    }
+
+    private fun openHistory(entityId: String, label: String) {
+        val server = viewModel.server.value ?: return
+        navigateTo(screenFactory = { EntityHistoryScreen(it, server, entityId, label) })
     }
 
     private fun openDetail(entityId: String, label: String) {

@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlin.math.roundToInt
 
 @Serializable
 data class ServerConfig(
@@ -172,6 +173,113 @@ data class HaZone(
     val longitude: Double,
     val radiusMeters: Float,
 )
+
+/**
+ * The attributes worth putting on screen for an entity, in reading order.
+ *
+ * Most entities get none. An attribute earns its place only when it says
+ * something the entity's own value and its controls do not already: a
+ * thermostat's controls show the mode, so the mode is absent here, while what
+ * it is currently *doing* about that mode is not shown anywhere else.
+ *
+ * Deliberately a fixed list rather than a setting. What to configure is not
+ * knowable before seeing what is there, and the full set sits one tap away
+ * regardless — so a domain whose default is wrong announces itself by being
+ * expanded over and over, and gets fixed here.
+ */
+object EntityDetails {
+
+    private val PER_DOMAIN: Map<String, List<Pair<String, String>>> = mapOf(
+        "climate" to listOf(
+            "current_temperature" to "Now",
+            "temperature" to "Set to",
+            "hvac_action" to "Doing",
+            "preset_mode" to "Preset",
+            "fan_mode" to "Fan",
+            "current_humidity" to "Humidity",
+        ),
+        "media_player" to listOf(
+            "media_title" to "Playing",
+            "media_artist" to "By",
+            "source" to "Source",
+            "volume_level" to "Volume",
+        ),
+        "light" to listOf(
+            "brightness" to "Brightness",
+            "color_temp_kelvin" to "Warmth",
+        ),
+        "cover" to listOf(
+            "current_position" to "Position",
+            "current_tilt_position" to "Tilt",
+        ),
+        "fan" to listOf(
+            "percentage" to "Speed",
+            "preset_mode" to "Preset",
+        ),
+        "water_heater" to listOf(
+            "temperature" to "Set to",
+            "operation_mode" to "Mode",
+        ),
+    )
+
+    /** The curated rows for this entity, skipping anything it did not report. */
+    fun chosen(state: HaState): List<Pair<String, String>> =
+        PER_DOMAIN[state.domain].orEmpty().mapNotNull { (key, label) ->
+            format(key, state)?.let { label to it }
+        }
+
+    /** Everything HA sent, for the expander. Plumbing and repeats left out. */
+    fun everything(state: HaState): List<Pair<String, String>> =
+        state.attributes.keys
+            .filterNot { it in NEVER_SHOWN }
+            .sorted()
+            .mapNotNull { key ->
+                format(key, state)?.let { key.replace('_', ' ') to it }
+            }
+
+    /**
+     * Values people can read, not the ones the machine passes around.
+     * `brightness` is 0-255 and `volume_level` a fraction; both mean a
+     * percentage to everyone who is not a light bulb.
+     */
+    private fun format(key: String, state: HaState): String? {
+        val raw = state.attributes[key] ?: return null
+        return when (key) {
+            "brightness" -> state.number(key)?.let { "${(it / 255 * 100).roundToInt()}%" }
+            "volume_level" -> state.number(key)?.let { "${(it * 100).roundToInt()}%" }
+            "percentage", "current_position", "current_tilt_position" ->
+                state.number(key)?.let { "${it.roundToInt()}%" }
+            "current_temperature", "temperature" ->
+                state.number(key)?.let { formatReading(it, "\u00b0") }
+            "color_temp_kelvin" -> state.number(key)?.let { "${it.roundToInt()}K" }
+            else -> when (raw) {
+                is JsonPrimitive -> raw.contentOrNull
+                    ?.takeIf { it.isNotBlank() && it != "null" }
+                    ?.replace('_', ' ')
+                    ?.replaceFirstChar { it.uppercase() }
+                is JsonArray -> raw.joinToString(", ") {
+                    (it as? JsonPrimitive)?.contentOrNull.orEmpty()
+                }.takeIf { it.isNotBlank() }
+                else -> null
+            }
+        }
+    }
+
+    /** Names, icons and capability bitfields: shown elsewhere or to nobody. */
+    private val NEVER_SHOWN = setOf(
+        "friendly_name",
+        "icon",
+        "entity_picture",
+        "supported_features",
+        "supported_color_modes",
+        "attribution",
+        "device_class",
+        "state_class",
+        "unit_of_measurement",
+        "editable",
+        "id",
+    )
+}
 
 /** One recorded state of an entity, as the history API hands it back. */
 data class HistoryPoint(val atMillis: Long, val state: String) {

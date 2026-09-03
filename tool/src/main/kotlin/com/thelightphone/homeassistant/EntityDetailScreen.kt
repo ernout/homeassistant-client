@@ -179,6 +179,18 @@ class EntityDetailScreen(
                         else -> ToggleControl(state)
                     }
 
+                    // Controls answer "what is it doing"; the link answers
+                    // "what has it been doing", which this screen cannot.
+                    LightText(
+                        text = "History",
+                        variant = LightTextVariant.Copy,
+                        lighten = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .lightClickable { openHistory() }
+                            .padding(top = 24.dp, bottom = 8.dp),
+                    )
+
                     error?.let {
                         LightText(
                             text = it,
@@ -190,6 +202,10 @@ class EntityDetailScreen(
                 }
             }
         }
+    }
+
+    private fun openHistory() {
+        navigateTo(screenFactory = { EntityHistoryScreen(it, server, entityId, title) })
     }
 
     @Composable
