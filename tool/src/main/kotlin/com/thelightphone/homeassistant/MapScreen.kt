@@ -49,6 +49,7 @@ import com.thelightphone.sdk.ui.LightThemeTokens
 import com.thelightphone.sdk.ui.LightTopBar
 import com.thelightphone.sdk.ui.LightTopBarCenter
 import com.thelightphone.sdk.ui.gridUnitsAsDp
+import com.thelightphone.sdk.ui.lightClickable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -67,6 +68,7 @@ class MapViewModel(
 ) : LightViewModel<Unit>() {
 
     data class Marker(
+        val entityId: String,
         val label: String,
         val zone: String,
         val latitude: Double,
@@ -98,6 +100,9 @@ class MapViewModel(
     val loading = MutableStateFlow(false)
     val home = MutableStateFlow<Pair<Double, Double>?>(null)
 
+    /** Whose marker the map is currently held on, if any. */
+    val focused = MutableStateFlow<String?>(null)
+
     private var loadJob: kotlinx.coroutines.Job? = null
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
@@ -118,10 +123,12 @@ class MapViewModel(
                 home.value = homeCoordinates
                 client.fetchStates()
                     .onSuccess { (states, _) ->
-                        val found = entityIds.mapNotNull { states[it]?.toMarker(homeCoordinates) }
+                        val found = entityIds.mapNotNull { id ->
+                            states[id]?.toMarker(id, homeCoordinates)
+                        }
                         markers.value = found
                         error.value = if (found.isEmpty()) "No entities with coordinates." else null
-                        loadTiles(found, homeCoordinates)
+                        frameAll()
                     }
                     .onFailure { error.value = it.message }
             } finally {
@@ -132,8 +139,9 @@ class MapViewModel(
     }
 
     /** Frames every marker plus home, then loads the tiles for that viewport. */
-    private suspend fun loadTiles(found: List<Marker>, homeCoordinates: Pair<Double, Double>) {
-        val positions = found.map { it.latitude to it.longitude } + homeCoordinates
+    private suspend fun frameAll() {
+        val homeCoordinates = home.value ?: return
+        val positions = markers.value.map { it.latitude to it.longitude } + homeCoordinates
         val zoom = MapTiles.fitZoom(positions, viewportTiles = GRID.toDouble())
         viewport.value = MapViewport.centredOn(
             latitude = positions.map { it.first }.average(),
@@ -141,6 +149,22 @@ class MapViewModel(
             zoom = zoom,
         )
         loadViewport()
+    }
+
+    /**
+     * Holds the map on one entity, close in. Tapping the same one again lets go
+     * and frames everybody, so the way back out is the way you came in — there
+     * is no room on this screen for a button that only sometimes applies.
+     */
+    fun focusOn(marker: Marker) {
+        if (focused.value == marker.entityId) {
+            focused.value = null
+            loadJob?.cancel()
+            loadJob = viewModelScope.launch { frameAll() }
+        } else {
+            focused.value = marker.entityId
+            moveTo(MapViewport.centredOn(marker.latitude, marker.longitude, FOCUS_ZOOM))
+        }
     }
 
     /** Pans and pinches funnel through here; tiles are cached, so this is cheap. */
@@ -176,10 +200,14 @@ class MapViewModel(
         if (loaded.isEmpty() && error.value == null) error.value = "Could not load map tiles."
     }
 
-    private fun HaState.toMarker(homeCoordinates: Pair<Double, Double>): Marker? {
+    private fun HaState.toMarker(
+        entityId: String,
+        homeCoordinates: Pair<Double, Double>,
+    ): Marker? {
         val latitude = attributes.double("latitude") ?: return null
         val longitude = attributes.double("longitude") ?: return null
         return Marker(
+            entityId = entityId,
             label = friendlyName,
             zone = state.replace('_', ' ').replaceFirstChar { it.uppercase() },
             latitude = latitude,
@@ -199,6 +227,9 @@ class MapViewModel(
     private companion object {
         const val GRID = 3
         const val EARTH_RADIUS_METERS = 6_371_000.0
+
+        /** Close enough to see which street, wide enough to keep bearings. */
+        const val FOCUS_ZOOM = 16
 
         /** Equirectangular approximation; plenty for city-scale distances. */
         fun distanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -234,6 +265,7 @@ class MapScreen(
         val home by viewModel.home.collectAsState()
         val error by viewModel.error.collectAsState()
         val loading by viewModel.loading.collectAsState()
+        val focused by viewModel.focused.collectAsState()
 
         LightTheme(colors = themeColors) {
             Column(
@@ -264,7 +296,13 @@ class MapScreen(
                         // Tiles are drawn past the viewport edges, and a
                         // DrawScope doesn't clip on its own, so they would
                         // otherwise paint over the top bar and the list.
-                        MapCanvas(view, markers, home, Modifier.fillMaxSize().clipToBounds())
+                        MapCanvas(
+                            view = view,
+                            markers = markers,
+                            home = home,
+                            focused = focused,
+                            modifier = Modifier.fillMaxSize().clipToBounds(),
+                        )
                     } else {
                         LightText(
                             text = error ?: "Loading map…",
@@ -293,11 +331,18 @@ class MapScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .lightClickable { viewModel.focusOn(marker) }
                                 .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             LightText(
-                                text = marker.label,
+                                // The same trailing dot the settings list uses
+                                // for the selected server.
+                                text = if (marker.entityId == focused) {
+                                    "${marker.label} ·"
+                                } else {
+                                    marker.label
+                                },
                                 variant = LightTextVariant.Copy,
                                 modifier = Modifier.weight(1f),
                             )
@@ -318,6 +363,7 @@ class MapScreen(
         view: MapViewModel.MapView,
         markers: List<MapViewModel.Marker>,
         home: Pair<Double, Double>?,
+        focused: String?,
         modifier: Modifier,
     ) {
         val content = LightThemeTokens.colors.content
@@ -396,8 +442,16 @@ class MapScreen(
                 )
             }
 
-            markers.forEach { marker ->
-                drawPin(project(marker.latitude, marker.longitude), marker.initial, content, background)
+            // The focused one last, so its ring is never half-covered by a
+            // marker standing on the same spot.
+            markers.sortedBy { it.entityId == focused }.forEach { marker ->
+                drawPin(
+                    position = project(marker.latitude, marker.longitude),
+                    initial = marker.initial,
+                    focused = marker.entityId == focused,
+                    content = content,
+                    background = background,
+                )
             }
         }
     }
@@ -409,10 +463,27 @@ class MapScreen(
     private fun DrawScope.drawPin(
         position: Offset,
         initial: String,
+        focused: Boolean,
         content: androidx.compose.ui.graphics.Color,
         background: androidx.compose.ui.graphics.Color,
     ) {
         val radius = if (initial.length > 1) 36f else 30f
+        if (focused) {
+            // A halo rather than a different colour: the palette is two inks,
+            // and recolouring the disc would read as a different kind of thing.
+            drawCircle(
+                color = background,
+                radius = radius + 9f,
+                center = position,
+                style = Stroke(width = 6f),
+            )
+            drawCircle(
+                color = content,
+                radius = radius + 13f,
+                center = position,
+                style = Stroke(width = 4f),
+            )
+        }
         drawCircle(color = content, radius = radius, center = position)
         drawCircle(
             color = background,
