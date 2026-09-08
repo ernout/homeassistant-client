@@ -615,7 +615,7 @@ object HaActions {
         state ?: return false
         return when (state.domain) {
             "climate", "cover", "fan", "media_player", "input_number", "number",
-            "alarm_control_panel" -> true
+            "alarm_control_panel", "input_select", "select" -> true
             "light" -> state.supportsBrightness
             else -> false
         }

@@ -176,6 +176,7 @@ class EntityDetailScreen(
                         "climate" -> ClimateControls(state)
                         "fan" -> FanControls(state)
                         "input_number", "number" -> NumberControls(state)
+                        "input_select", "select" -> SelectControls(state)
                         else -> ToggleControl(state)
                     }
 
@@ -206,6 +207,65 @@ class EntityDetailScreen(
 
     private fun openHistory() {
         navigateTo(screenFactory = { EntityHistoryScreen(it, server, entityId, title) })
+    }
+
+    /**
+     * A list whose choices are whatever the entity says they are.
+     *
+     * `input_select` and `select` are the same control from two sources — one
+     * made by hand in the config, one handed over by an integration — so both
+     * land here; the service lives in the entity's own domain, which is the
+     * only thing that differs between them.
+     */
+    @Composable
+    private fun SelectControls(state: HaState?) {
+        val current = state?.state
+        LightText(
+            text = "Now · ${HaActions.stateLabel(state)}",
+            variant = LightTextVariant.Detail,
+            lighten = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp),
+        )
+
+        val options = state?.textList("options").orEmpty()
+        if (options.isEmpty()) {
+            LightText(
+                text = "No options offered.",
+                variant = LightTextVariant.Detail,
+                lighten = true,
+                modifier = Modifier.padding(top = 20.dp),
+            )
+            return
+        }
+
+        SectionLabel("Choose")
+        options.forEach { option ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .lightClickable {
+                        state?.domain?.let { domain ->
+                            viewModel.call(domain, "select_option", mapOf("option" to option))
+                        }
+                    }
+                    .padding(vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LightText(
+                    // Left as written: these are somebody's own labels, and
+                    // tidying the underscores out of a mode name is one thing,
+                    // rewriting a list someone typed themselves is another.
+                    text = option,
+                    variant = LightTextVariant.Copy,
+                    modifier = Modifier.weight(1f),
+                )
+                if (option == current) {
+                    LightText(text = "\u00b7", variant = LightTextVariant.Copy)
+                }
+            }
+        }
     }
 
     @Composable
